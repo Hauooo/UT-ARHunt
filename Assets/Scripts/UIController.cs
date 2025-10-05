@@ -33,4 +33,10 @@ public class UIController : MonoBehaviour
             currentTreasure = null;
         }
     }
+
+    public void CollectTreasureFromManager()
+    {
+        treasureText.text = "Treasure collected!";
+        collectButton.gameObject.SetActive(false);
+    }
 }

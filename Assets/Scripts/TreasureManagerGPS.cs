@@ -7,6 +7,8 @@ public class TreasureManagerGPS : MonoBehaviour
     public enum PlayerMode { Setter, Finder }
     public PlayerMode mode = PlayerMode.Setter;
 
+    public UIController uiController;
+
     [Header("UI References")]
     public Button setTreasureButton;
     public Button collectButton;
@@ -20,11 +22,12 @@ public class TreasureManagerGPS : MonoBehaviour
 
     private GameObject currentTreasure;
     private bool treasureSet = false;
+    private bool treasureCollected = false;
 
     private float treasureLat;
     private float treasureLon;
 
-    public float collectDistance = 5f;
+    public float collectDistance = 3f;
     public bool debugIndoorTest = true;
     public float indoorSpawnDistance = 2f;
 
@@ -35,6 +38,9 @@ public class TreasureManagerGPS : MonoBehaviour
 
         if (modeToggleButton != null)
             modeToggleButton.onClick.AddListener(ToggleMode);
+
+
+        InvokeRepeating("UpdateTreasurePosition", 2f, 5f); // Update every 5 seconds after a 2 second delay
     }
 
     void SetupUI()
@@ -73,10 +79,7 @@ public class TreasureManagerGPS : MonoBehaviour
         SetupUI();
     }
 
-    void Update()
-    {
-        UpdateTreasurePosition();
-    }
+    
 
     void LogToUI(string msg)
     {
@@ -101,12 +104,13 @@ public class TreasureManagerGPS : MonoBehaviour
         PlayerPrefs.Save();
 
         treasureSet = true;
+        treasureCollected = false;
         LogToUI($"Treasure set at: {treasureLat}, {treasureLon}");
     }
 
     void UpdateTreasurePosition()
     {
-        if (mode != PlayerMode.Finder) return;
+        if (mode != PlayerMode.Finder || treasureCollected) return;
 
         treasureLat = PlayerPrefs.GetFloat("TreasureLat", 0f);
         treasureLon = PlayerPrefs.GetFloat("TreasureLon", 0f);
@@ -138,10 +142,19 @@ public class TreasureManagerGPS : MonoBehaviour
 
             currentTreasure = Instantiate(treasurePrefab, treasurePos, Quaternion.identity);
             LogToUI($"Treasure spawned at: {treasurePos}");
+
+
+            if (uiController != null)
+            {
+                uiController.ShowTreasure(currentTreasure); // Notify UI controller
+            }
         }
         else
         {
-            currentTreasure.transform.position = treasurePos;
+            // Don't move the treasure once placed
+            // currentTreasure.transform.position = treasurePos;
+            // currentTreasure.transform.rotation = Quaternion.LookRotation(treasurePos - Camera.main.transform.position);
+
         }
 
         if (arrowIndicator != null)
@@ -162,7 +175,17 @@ public class TreasureManagerGPS : MonoBehaviour
         if (currentTreasure != null)
         {
             Destroy(currentTreasure);
+            currentTreasure = null;
+            treasureCollected = true;
             LogToUI("Treasure collected!");
+            collectButton.gameObject.SetActive(false);
+
+            if (uiController != null)
+            {
+                uiController.ShowTreasure(null); // Notify UI controller
+                uiController.CollectTreasureFromManager();
+
+            }
         }
         else
         {

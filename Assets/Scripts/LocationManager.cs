@@ -9,6 +9,9 @@ public class LocationManager : MonoBehaviour
     public double Longitude { get; private set; }
     public bool IsReady { get; private set; } = false;
 
+    private Vector2 smoothedGPS;
+    private float smoothFactor = 0.1f; // Adjust for more or less smoothing
+
     private void Awake()
     {
         if (Instance == null) Instance = this;
@@ -46,8 +49,10 @@ public class LocationManager : MonoBehaviour
     {
         if (Input.location.status == LocationServiceStatus.Running)
         {
-            Latitude = Input.location.lastData.latitude;
-            Longitude = Input.location.lastData.longitude;
+            double smoothLatitude = Input.location.lastData.latitude;
+            double smoothLongitude = Input.location.lastData.longitude;
+
+            smoothedGPS = Vector2.Lerp(smoothedGPS, new Vector2((float)smoothLatitude, (float)smoothLongitude), smoothFactor);
         }
     }
 
