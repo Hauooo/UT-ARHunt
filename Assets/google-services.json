@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "512419556913",
+    "project_id": "ut-ar-treasure-hunt",
+    "storage_bucket": "ut-ar-treasure-hunt.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:512419556913:android:d0dced2acdf8e3a6f16f10",
+        "android_client_info": {
+          "package_name": "com.unity.template.ar_mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAYvYqnvkw9v851QHPma1K25fG46v_snDY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

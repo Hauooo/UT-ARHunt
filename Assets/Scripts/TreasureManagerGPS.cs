@@ -1,208 +1,238 @@
-﻿using UnityEngine;
+﻿// --- TreasureManagerGPS.cs (DEBUG VERSION) ---
+// Please copy this entire script to replace your current one.
+
+using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using Firebase;
+using Firebase.Database;
+using Firebase.Extensions;
+using System;
+using System.Collections.Generic;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 
 public class TreasureManagerGPS : MonoBehaviour
 {
-    public enum PlayerMode { Setter, Finder }
-    public PlayerMode mode = PlayerMode.Setter;
+    [Serializable]
+    public class TreasureData { public double lat; public double lon; public bool collected; }
 
-    public UIController uiController;
+    [Header("Game Mode & Settings")]
+    public PlayerMode mode = PlayerMode.Setter;
+    public enum PlayerMode { Setter, Finder }
+    [Tooltip("How accurate the GPS signal must be (in meters) for the SETTER to place a treasure.")]
+    public float requiredAccuracy = 15.0f;
+    public float collectDistance = 5f;
+    public float updateIntervalSeconds = 2f;
+
+    [Header("Discovery Settings")]
+    [Tooltip("The player must be within this distance (meters) to be considered 'arrived' at the treasure location.")]
+    public float arrivalDistance = 5f;
+
+    [Header("Component References")]
+    public Compass compass;
+    public ARRaycastManager arRaycastManager;
+    public GameObject treasurePrefab;
 
     [Header("UI References")]
     public Button setTreasureButton;
     public Button collectButton;
-    public Button modeToggleButton; // NEW: Toggle button
-    public TextMeshProUGUI statusText;
-    public TextMeshProUGUI modeLabel; // Optional text label to show current mode
+    public Button modeToggleButton;
+    public TMP_Text statusText;
+    public TMP_Text modeLabel;
 
-    [Header("Gameplay")]
-    public GameObject treasurePrefab;
-    public Transform arrowIndicator;
-
+    private DatabaseReference dbRef;
+    private bool firebaseInitialized = false;
     private GameObject currentTreasure;
-    private bool treasureSet = false;
-    private bool treasureCollected = false;
+    private double treasureLat;
+    private double treasureLon;
+    private bool isTreasureCollected = false;
+    private bool hasPlayerArrived = false;
 
-    private float treasureLat;
-    private float treasureLon;
-
-    public float collectDistance = 3f;
-    public bool debugIndoorTest = true;
-    public float indoorSpawnDistance = 2f;
+    void Awake() { Screen.sleepTimeout = SleepTimeout.NeverSleep; }
 
     void Start()
     {
-        SetupUI();
+        if (arRaycastManager == null) arRaycastManager = FindObjectOfType<ARRaycastManager>();
         Input.location.Start();
-
-        if (modeToggleButton != null)
-            modeToggleButton.onClick.AddListener(ToggleMode);
-
-
-        InvokeRepeating("UpdateTreasurePosition", 2f, 5f); // Update every 5 seconds after a 2 second delay
+        setTreasureButton.onClick.AddListener(SetTreasureHere);
+        collectButton.onClick.AddListener(CollectTreasure);
+        if (modeToggleButton != null) modeToggleButton.onClick.AddListener(ToggleMode);
+        LogToUI("Initializing Firebase...");
+        FirebaseApp.CheckAndFixDependenciesAsync().ContinueWithOnMainThread(task =>
+        {
+            if (task.Result == DependencyStatus.Available)
+            {
+                string dbUrl = "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/";
+                dbRef = FirebaseDatabase.GetInstance(dbUrl).RootReference;
+                firebaseInitialized = true;
+                LogToUI("Firebase Initialized.");
+                SetupForCurrentMode();
+            }
+            else { LogToUI($"Firebase initialization failed: {task.Exception}"); }
+        });
+        SetupUI();
     }
 
-    void SetupUI()
+    void OnApplicationPause(bool pauseStatus) { Screen.sleepTimeout = pauseStatus ? SleepTimeout.SystemSetting : SleepTimeout.NeverSleep; }
+
+    void OnDestroy()
     {
-        if (mode == PlayerMode.Setter)
+        Screen.sleepTimeout = SleepTimeout.SystemSetting;
+        if (dbRef != null) dbRef.Child("treasure").ValueChanged -= OnTreasureDataChanged;
+        if (Input.location.isEnabledByUser) Input.location.Stop();
+    }
+
+    void Update()
+    {
+        if (CanPlaceTreasure())
         {
-            setTreasureButton.gameObject.SetActive(true);
-            collectButton.gameObject.SetActive(false);
-            setTreasureButton.onClick.RemoveAllListeners();
-            setTreasureButton.onClick.AddListener(SetTreasureHere);
-            LogToUI("Mode: Setter");
-            if (modeLabel) modeLabel.text = "Mode: Player A (Setter)";
+            TryPlaceTreasureOnNearbySurface();
+        }
+    }
+
+    private void UpdateFinderLogic()
+    {
+        if (mode != PlayerMode.Finder || isTreasureCollected || treasureLat == 0) return;
+        if (Input.location.status != LocationServiceStatus.Running) { LogToUI("Waiting for GPS signal..."); return; }
+
+        if (currentTreasure != null)
+        {
+            float threeDDistance = Vector3.Distance(Camera.main.transform.position, currentTreasure.transform.position);
+            collectButton.gameObject.SetActive(threeDDistance <= collectDistance);
+            LogToUI($"Distance: {threeDDistance:F1}m");
+//            if (compass != null) compass.SetTreasureDirection(currentTreasure.transform.position - Camera.main.transform.position);
         }
         else
         {
-            setTreasureButton.gameObject.SetActive(false);
-            collectButton.gameObject.SetActive(true);
-            collectButton.onClick.RemoveAllListeners();
-            collectButton.onClick.AddListener(CollectTreasure);
-            LogToUI("Mode: Finder");
-            if (modeLabel) modeLabel.text = "Mode: Player B (Finder)";
+            UpdateHiddenTreasure(); // MODIFIED: No longer passes parameters
         }
     }
 
-    void ToggleMode()
+    // ===================================================================
+    // 🔹 THIS IS THE MODIFIED FUNCTION WITH DEBUG LOGS
+    // ===================================================================
+    private void UpdateHiddenTreasure()
+    {
+        double playerLat = GetPlayerLatitude();
+        double playerLon = GetPlayerLongitude();
+        float currentAccuracy = Input.location.lastData.horizontalAccuracy;
+
+        Vector3 treasureGpsPos = GPSToUnityPosition(treasureLat, treasureLon, playerLat, playerLon);
+
+        Vector2 playerPos2D = new Vector2(Camera.main.transform.position.x, Camera.main.transform.position.z);
+        Vector2 treasurePos2D = new Vector2(treasureGpsPos.x, treasureGpsPos.z);
+        float horizontalDistance = Vector2.Distance(playerPos2D, treasurePos2D);
+
+        // --- NEW DEBUG BLOCK ---
+        Debug.LogWarning("--- DEBUGGING DISTANCE CALCULATION ---");
+        Debug.Log($"1. Treasure Coords (from Firebase): Lat={treasureLat:F8}, Lon={treasureLon:F8}");
+        Debug.Log($"2. Player Coords (Live GPS): Lat={playerLat:F8}, Lon={playerLon:F8}");
+        Debug.Log($"3. Calculated treasureGpsPos (Offset in meters): {treasureGpsPos}");
+        Debug.Log($"4. Camera Position (in AR space): {Camera.main.transform.position}");
+        Debug.Log($"5. FINAL HORIZONTAL DISTANCE: {horizontalDistance}m");
+        Debug.LogWarning("------------------------------------");
+        // -----------------------
+
+        hasPlayerArrived = (horizontalDistance <= arrivalDistance);
+
+        if (hasPlayerArrived)
+        {
+            LogToUI($"You've arrived! (Accuracy: {currentAccuracy:F1}m). Point at a surface to reveal.");
+        }
+        else
+        {
+            LogToUI($"Distance: {horizontalDistance:F1}m (Signal Accuracy: {currentAccuracy:F1}m)");
+        }
+
+ //       if (compass != null) compass.SetTreasureDirection(treasureGpsPos - Camera.main.transform.position);
+    }
+
+    private bool CanPlaceTreasure() { return mode == PlayerMode.Finder && currentTreasure == null && hasPlayerArrived; }
+
+    private void TryPlaceTreasureOnNearbySurface()
+    {
+        if (arRaycastManager == null) return;
+        var screenCenter = new Vector2(Screen.width / 2f, Screen.height / 2f);
+        var hits = new List<ARRaycastHit>();
+        if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon))
+        {
+            Pose hitPose = hits[0].pose;
+            currentTreasure = Instantiate(treasurePrefab, hitPose.position, hitPose.rotation);
+            LogToUI("You found the treasure!");
+            hasPlayerArrived = false;
+        }
+    }
+
+    public void SetTreasureHere()
+    {
+        if (!firebaseInitialized) { LogToUI("Firebase not ready."); return; }
+        if (Input.location.status != LocationServiceStatus.Running) { LogToUI("GPS not ready."); return; }
+        float currentAccuracy = Input.location.lastData.horizontalAccuracy;
+        if (currentAccuracy > requiredAccuracy)
+        {
+            LogToUI($"GPS signal too weak (Accuracy: {currentAccuracy:F1}m). Move to an open area and wait.");
+            return;
+        }
+        double currentLat = GetPlayerLatitude();
+        double currentLon = GetPlayerLongitude();
+        var treasureData = new TreasureData { lat = currentLat, lon = currentLon, collected = false };
+        dbRef.Child("treasure").SetRawJsonValueAsync(JsonUtility.ToJson(treasureData));
+        LogToUI($"Treasure set with {currentAccuracy:F1}m accuracy.");
+    }
+
+    private void StartListeningForTreasure() { dbRef.Child("treasure").ValueChanged += OnTreasureDataChanged; }
+    private void OnTreasureDataChanged(object sender, ValueChangedEventArgs args)
+    {
+        if (args.DatabaseError != null) { LogToUI("Firebase error: " + args.DatabaseError.Message); return; }
+        if (!args.Snapshot.Exists) return;
+        TreasureData data = JsonUtility.FromJson<TreasureData>(args.Snapshot.GetRawJsonValue());
+        treasureLat = data.lat; treasureLon = data.lon; isTreasureCollected = data.collected;
+        if (isTreasureCollected && currentTreasure != null) { Destroy(currentTreasure); }
+    }
+    private void CollectTreasure()
+    {
+        if (!firebaseInitialized || currentTreasure == null) return;
+        dbRef.Child("treasure/collected").SetValueAsync(true);
+        Destroy(currentTreasure);
+        currentTreasure = null;
+        collectButton.gameObject.SetActive(false);
+    }
+    public void ToggleMode()
     {
         mode = (mode == PlayerMode.Setter) ? PlayerMode.Finder : PlayerMode.Setter;
-
-        // Clean up old treasure when switching
-        if (currentTreasure != null)
-        {
-            Destroy(currentTreasure);
-            currentTreasure = null;
-        }
-
+        if (currentTreasure != null) Destroy(currentTreasure);
+        CancelInvoke(nameof(UpdateFinderLogic));
+        if (dbRef != null) dbRef.Child("treasure").ValueChanged -= OnTreasureDataChanged;
         SetupUI();
+        if (firebaseInitialized) SetupForCurrentMode();
     }
-
-    
-
-    void LogToUI(string msg)
+    private void SetupForCurrentMode()
     {
-        if (statusText != null)
-            statusText.text = msg;
-        Debug.Log(msg);
-    }
-
-    void SetTreasureHere()
-    {
-        if (Input.location.status != LocationServiceStatus.Running)
-        {
-            LogToUI("GPS not running!");
-            return;
-        }
-
-        treasureLat = (float)Input.location.lastData.latitude;
-        treasureLon = (float)Input.location.lastData.longitude;
-
-        PlayerPrefs.SetFloat("TreasureLat", treasureLat);
-        PlayerPrefs.SetFloat("TreasureLon", treasureLon);
-        PlayerPrefs.Save();
-
-        treasureSet = true;
-        treasureCollected = false;
-        LogToUI($"Treasure set at: {treasureLat}, {treasureLon}");
-    }
-
-    void UpdateTreasurePosition()
-    {
-        if (mode != PlayerMode.Finder || treasureCollected) return;
-
-        treasureLat = PlayerPrefs.GetFloat("TreasureLat", 0f);
-        treasureLon = PlayerPrefs.GetFloat("TreasureLon", 0f);
-
-        if (treasureLat == 0f && treasureLon == 0f)
-        {
-            LogToUI("No treasure set (PlayerPrefs empty).");
-            return;
-        }
-
-        if (Input.location.status != LocationServiceStatus.Running)
-        {
-            LogToUI("GPS not running in Finder.");
-            return;
-        }
-
-        double playerLat = Input.location.lastData.latitude;
-        double playerLon = Input.location.lastData.longitude;
-
-        Vector3 treasurePos = GPSToUnityPosition(treasureLat, treasureLon, playerLat, playerLon);
-
-        if (currentTreasure == null)
-        {
-            if (debugIndoorTest && treasurePos.magnitude < 0.5f)
-            {
-                treasurePos = Camera.main.transform.position + Camera.main.transform.forward * indoorSpawnDistance;
-                LogToUI("Indoor test: treasure spawned in front of camera.");
-            }
-
-            currentTreasure = Instantiate(treasurePrefab, treasurePos, Quaternion.identity);
-            LogToUI($"Treasure spawned at: {treasurePos}");
-
-
-            if (uiController != null)
-            {
-                uiController.ShowTreasure(currentTreasure); // Notify UI controller
-            }
-        }
+        if (mode == PlayerMode.Setter) { LogToUI("You are the Setter. Tap 'Set Treasure'."); }
         else
         {
-            // Don't move the treasure once placed
-            // currentTreasure.transform.position = treasurePos;
-            // currentTreasure.transform.rotation = Quaternion.LookRotation(treasurePos - Camera.main.transform.position);
-
+            LogToUI("You are the Finder. Waiting for treasure...");
+            StartListeningForTreasure();
+            InvokeRepeating(nameof(UpdateFinderLogic), 1f, updateIntervalSeconds);
         }
-
-        if (arrowIndicator != null)
-        {
-            Vector3 dir = treasurePos - Camera.main.transform.position;
-            dir.y = 0;
-            if (dir.magnitude > 0.1f)
-                arrowIndicator.rotation = Quaternion.LookRotation(dir);
-        }
-
-        float distance = Vector3.Distance(Camera.main.transform.position, treasurePos);
-        LogToUI($"Distance to treasure: {distance:F1} m");
-        collectButton.gameObject.SetActive(distance <= collectDistance);
     }
-
-    void CollectTreasure()
+    private void SetupUI()
     {
-        if (currentTreasure != null)
-        {
-            Destroy(currentTreasure);
-            currentTreasure = null;
-            treasureCollected = true;
-            LogToUI("Treasure collected!");
-            collectButton.gameObject.SetActive(false);
-
-            if (uiController != null)
-            {
-                uiController.ShowTreasure(null); // Notify UI controller
-                uiController.CollectTreasureFromManager();
-
-            }
-        }
-        else
-        {
-            LogToUI("No treasure to collect.");
-        }
+        setTreasureButton.gameObject.SetActive(mode == PlayerMode.Setter);
+        collectButton.gameObject.SetActive(false);
+        if (modeLabel != null) modeLabel.text = $"Mode: {mode}";
     }
-
-    Vector3 GPSToUnityPosition(double targetLat, double targetLon, double playerLat, double playerLon)
+    private double GetPlayerLatitude() { return Input.location.lastData.latitude; }
+    private double GetPlayerLongitude() { return Input.location.lastData.longitude; }
+    private Vector3 GPSToUnityPosition(double targetLat, double targetLon, double playerLat, double playerLon)
     {
-        float earthRadius = 6371000f;
-        float dLat = Mathf.Deg2Rad * (float)(targetLat - playerLat);
-        float dLon = Mathf.Deg2Rad * (float)(targetLon - playerLon);
-        float lat1 = Mathf.Deg2Rad * (float)playerLat;
-
-        float x = dLon * Mathf.Cos(lat1) * earthRadius;
-        float z = dLat * earthRadius;
-
-        return new Vector3(x, 0, z);
+        const double R = 6371000.0;
+        double dLat = (targetLat - playerLat) * (Math.PI / 180.0);
+        double dLon = (targetLon - playerLon) * (Math.PI / 180.0);
+        double x = dLon * R * Math.Cos(playerLat * (Math.PI / 180.0));
+        double z = dLat * R;
+        return new Vector3((float)x, 0, (float)z);
     }
+    private void LogToUI(string message) { if (statusText != null) statusText.text = message; Debug.Log(message); }
 }
