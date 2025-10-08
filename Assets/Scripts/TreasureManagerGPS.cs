@@ -118,22 +118,14 @@ public class TreasureManagerGPS : MonoBehaviour
         double playerLon = GetPlayerLongitude();
         float currentAccuracy = Input.location.lastData.horizontalAccuracy;
 
+        // treasureGpsPos is the treasure's position relative to the player.
+        // The player's position in this coordinate system is always (0, 0, 0).
         Vector3 treasureGpsPos = GPSToUnityPosition(treasureLat, treasureLon, playerLat, playerLon);
 
-        Vector2 playerPos2D = new Vector2(Camera.main.transform.position.x, Camera.main.transform.position.z);
-        Vector2 treasurePos2D = new Vector2(treasureGpsPos.x, treasureGpsPos.z);
-        float horizontalDistance = Vector2.Distance(playerPos2D, treasurePos2D);
+        // Therefore, the distance to the treasure is simply the magnitude of this offset vector.
+        float horizontalDistance = new Vector2(treasureGpsPos.x, treasureGpsPos.z).magnitude;
 
-        // --- NEW DEBUG BLOCK ---
-        Debug.LogWarning("--- DEBUGGING DISTANCE CALCULATION ---");
-        Debug.Log($"1. Treasure Coords (from Firebase): Lat={treasureLat:F8}, Lon={treasureLon:F8}");
-        Debug.Log($"2. Player Coords (Live GPS): Lat={playerLat:F8}, Lon={playerLon:F8}");
-        Debug.Log($"3. Calculated treasureGpsPos (Offset in meters): {treasureGpsPos}");
-        Debug.Log($"4. Camera Position (in AR space): {Camera.main.transform.position}");
-        Debug.Log($"5. FINAL HORIZONTAL DISTANCE: {horizontalDistance}m");
-        Debug.LogWarning("------------------------------------");
-        // -----------------------
-
+        // This is now a meaningful distance in meters.
         hasPlayerArrived = (horizontalDistance <= arrivalDistance);
 
         if (hasPlayerArrived)
@@ -145,7 +137,9 @@ public class TreasureManagerGPS : MonoBehaviour
             LogToUI($"Distance: {horizontalDistance:F1}m (Signal Accuracy: {currentAccuracy:F1}m)");
         }
 
- //       if (compass != null) compass.SetTreasureDirection(treasureGpsPos - Camera.main.transform.position);
+        // You can now also correctly update the compass
+        // The direction is simply the treasure's position vector, since the player is at the origin.
+        // if (compass != null) compass.SetTreasureDirection(treasureGpsPos);
     }
 
     private bool CanPlaceTreasure() { return mode == PlayerMode.Finder && currentTreasure == null && hasPlayerArrived; }
