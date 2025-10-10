@@ -9,12 +9,24 @@ using System.Collections.Generic;
 // This is the central controller for the entire game.
 // It persists across scenes and manages the overall game state,
 // including room creation, joining, and scene transitions.
+
+public enum GameMode
+{
+    InMenu,
+    CreatingSet,
+    PlayingInRoom
+}
+
 public class GameManager : MonoBehaviour
 {
     public static GameManager Instance;
 
     [Header("Scene Configuration")]
     [SerializeField] private string arSceneName = "ARScene"; // Set this to the name of your AR scene in the Inspector
+
+    public GameMode CurrentMode { get; private set; }
+
+    public List<TreasureManagerGPS_Multiplayer.TreasureData> newSetTreasure = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
 
     // --- Public Properties & Events ---
     public string CurrentRoomId { get; private set; }
@@ -38,6 +50,7 @@ public class GameManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            CurrentMode = GameMode.InMenu;
         }
         else
         {
@@ -271,6 +284,84 @@ public class GameManager : MonoBehaviour
         return new String(code);
     }
     #endregion
+
+
+    public void StartCreatorMode()
+    {
+        Debug.Log("Entering Creator Mode...");
+        CurrentMode = GameMode.CreatingSet;
+        newSetTreasure.Clear();
+        SceneManager.LoadScene("CreatorScene");
+    }
+
+    public void ExitCreatorMode()
+    {
+        Debug.Log("Exiting Creator Mode...");
+        CurrentMode = GameMode.InMenu;
+        newSetTreasure.Clear();
+        SceneManager.LoadScene("MenuScene");
+    }
+
+    public void SaveNewTreasureSet(string setName)
+    {
+        if (newSetTreasure.Count == 0)
+        {
+            Debug.LogError("No treasures to save.");
+            return;
+        }
+
+        // 1. Create a unique ID for the new set
+        string newSetId = dbRef.Child("treasureSets").Push().Key;
+
+        // 2. Create the main TreasureSetData object
+        TreasureSetData newSet = new TreasureSetData
+        {
+            setId = newSetId,
+            setName = setName,
+            createdBy = AuthManager.Instance.UserId
+        };
+
+        // 3. Loop through the temp list and add them to the dictionary with unique keys
+        foreach (var treasureData in newSetTreasure)
+        {
+            string treasureKey = dbRef.Child("treasureSets").Child(newSetId).Child("treasures").Push().Key;
+            newSet.treasures[treasureKey] = treasureData;
+        }
+
+        // 4. Convert to JSON and save to Firebase
+        string json = JsonUtility.ToJson(newSet);
+        dbRef.Child("treasureSets").Child(newSetId).SetRawJsonValueAsync(json).ContinueWithOnMainThread(task =>
+        {
+            if (task.IsFaulted)
+            {
+                Debug.LogError("Failed to save treasure set: " + task.Exception);
+                // Optionally re-enable the save button here
+            }
+            else
+            {
+                Debug.Log($"Treasure set '{setName}' saved successfully!");
+                // On success, exit the creator mode and return to the menu
+                ExitCreatorMode();
+            }
+        });
+    }
+
+    public void ReturnToMenu()
+    {
+        Debug.Log("Returning to Main Menu...");
+
+        // Stop any active Firebase listeners to prevent errors in the menu scene.
+        StopListeningToRoomUpdates();
+
+        // Reset the game state.
+        CurrentMode = GameMode.InMenu;
+        CurrentRoomId = null;
+        IsHost = false;
+        newSetTreasure.Clear(); // Clear any temporary creation data.
+
+        // Load the menu scene. Make sure your scene is named "MenuScene".
+        SceneManager.LoadScene("MenuScene");
+    }
 }
 
 
@@ -323,3 +414,5 @@ public class PlayerData
 }
 
 #endregion
+
+

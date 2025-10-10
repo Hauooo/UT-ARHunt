@@ -47,7 +47,7 @@ public class MenuManager : MonoBehaviour
     }
     public void OnCreatorButton()
     {
-        ShowPanel(creatorPanel);
+        GameManager.Instance.StartCreatorMode();
     }
     
 }
