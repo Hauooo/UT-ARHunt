@@ -2,7 +2,6 @@ using UnityEngine;
 
 public class MenuManager : MonoBehaviour
 {
-
     [Header("Panels")]
     public GameObject mainMenuPanel;
     public GameObject joinRoomPanel;
@@ -10,44 +9,52 @@ public class MenuManager : MonoBehaviour
     public GameObject lobbyPanel;
     public GameObject creatorPanel;
 
+    
 
-    public GameObject activePanel;
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
+    [HideInInspector] public GameObject activePanel;
+
     void Start()
     {
         ShowPanel(mainMenuPanel);
+        GameManager.Instance.OnLobbyReady += HandleLobbyReady;
+        GameManager.Instance.OnJoinFailed += HandleJoinFailed;
     }
 
-    void ShowPanel(GameObject panel)
+    void OnDestroy()
+    {
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnLobbyReady -= HandleLobbyReady;
+            GameManager.Instance.OnJoinFailed -= HandleJoinFailed;
+        }
+    }
+
+    public void ShowPanel(GameObject panel)
     {
         if (activePanel != null)
-        {
             activePanel.SetActive(false);
-        }
-        
+
         activePanel = panel;
         panel.SetActive(true);
     }
 
-    public void OnJoinRoomButton()
+    public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
+    public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
+    public void OnBackButton() => ShowPanel(mainMenuPanel);
+    public void OnLobbyButton() => ShowPanel(lobbyPanel);
+
+    public void OnCreatorButton() => GameManager.Instance.StartCreatorMode();
+
+    // --- Handlers for GameManager events ---
+    private void HandleLobbyReady(string roomId, bool isHost)
     {
-        ShowPanel(joinRoomPanel);
-    }
-    public void OnCreateRoomButton()
-    {
-        ShowPanel(createRoomPanel);
-    }
-    public void OnBackButton()
-    {
-        ShowPanel(mainMenuPanel);
-    }
-    public void OnLobbyButton()
-    {
+        Debug.Log($"Lobby ready! Room ID: {roomId}");
         ShowPanel(lobbyPanel);
     }
-    public void OnCreatorButton()
+
+    private void HandleJoinFailed(string reason)
     {
-        GameManager.Instance.StartCreatorMode();
+        Debug.LogWarning($"Join failed: {reason}");
+        ShowPanel(mainMenuPanel);
     }
-    
 }

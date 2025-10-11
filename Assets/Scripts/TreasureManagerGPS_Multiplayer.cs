@@ -1,7 +1,3 @@
-// --- Merged & Refactored Multiplayer Treasure Manager ---
-// This script merges your latest version with a more performant and robust architecture.
-// It fixes critical efficiency issues to ensure a smooth multiplayer experience.
-
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
