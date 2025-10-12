@@ -5,6 +5,7 @@ using Firebase.Database;
 using Firebase.Extensions;
 using System;
 using System.Collections.Generic;
+using System.Collections;
 
 // This is the central controller for the entire game.
 // It persists across scenes and manages the overall game state,
@@ -40,42 +41,92 @@ public class GameManager : MonoBehaviour
 
     // --- Private State ---
     private DatabaseReference dbRef;
-    private bool isInitialized = false;
+    private bool isFirebaseReady = false;
 
     #region --- Unity Methods ---
 
     private void Awake()
     {
-        if (Instance == null)
+        string stackTrace = UnityEngine.StackTraceUtility.ExtractStackTrace();
+        Debug.LogError($"--- A GameManager just ran Awake() in scene '{gameObject.scene.name}' on GameObject: '{gameObject.name}' [ID: {gameObject.GetInstanceID()}] ---\nCreation Stack Trace:\n{stackTrace}", gameObject);
+
+        // Check FIRST — before doing anything else
+        if (Instance != null && Instance != this)
         {
-            Instance = this;
-            DontDestroyOnLoad(gameObject);
-            CurrentMode = GameMode.InMenu;
-        }
-        else
-        {
+            Debug.LogError($"Duplicate GameManager detected! Keeping ID: {Instance.GetInstanceID()}, destroying new ID: {this.GetInstanceID()} (Scene: {gameObject.scene.name})");
             Destroy(gameObject);
+            return;
+        }
+
+        // If we reach here, we are the one true instance
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+
+        // Subscribe to AuthManager
+        AuthManager.Instance.OnSignedIn += HandleAuthReady;
+
+        // If user already signed in, initialize immediately
+        if (AuthManager.Instance.User != null)
+        {
+            Debug.Log("AuthManager already has a signed-in user. Initializing Firebase immediately.");
+            HandleAuthReady(AuthManager.Instance.User);
         }
     }
 
+
     private void Start()
     {
-        // Initialize after Firebase and Auth are ready.
-        // We assume AuthManager handles its own initialization.
-        dbRef = FirebaseDatabase.DefaultInstance.RootReference;
-        isInitialized = true;
+        // --- REMOVE THIS ---
+        // We no longer initialize Firebase here.
+        // dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+        // isInitialized = true;
+
+        Debug.Log("GameManager initialized.");
     }
 
     private void OnEnable()
     {
+        var managers = FindObjectsOfType<GameManager>();
+        if (managers.Length > 1)
+        {
+            Debug.LogError($"[GameManager] {managers.Length} instances found! Destroying duplicates...");
+            foreach (var gm in managers)
+            {
+                if (gm != Instance)
+                    Destroy(gm.gameObject);
+            }
+        }
         // Subscribe to the sceneLoaded event to know when the AR scene is ready.
         SceneManager.sceneLoaded += OnSceneLoaded;
     }
 
-    private void OnDisable()
+    private void OnDestroy()
     {
-        SceneManager.sceneLoaded -= OnSceneLoaded;
-        // Consider unsubscribing from Firebase listeners here as a fallback.
+        // If this message appears, it is the smoking gun.
+        Debug.LogError($"!!! A GameManager instance [ID: {gameObject.GetInstanceID()}] was JUST DESTROYED !!! Is there another script loading scenes in a way that breaks DontDestroyOnLoad?", gameObject);
+
+        // Unsubscribe to prevent memory leaks
+        if (AuthManager.Instance != null)
+        {
+            AuthManager.Instance.OnSignedIn -= HandleAuthReady;
+        }
+    }
+
+    private void HandleAuthReady(Firebase.Auth.FirebaseUser user)
+    {
+        Debug.Log($"GameManager [ID: {gameObject.GetInstanceID()}] received 'OnSignedIn' signal. Initializing Firebase Database.");
+        dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+        isFirebaseReady = true;
+
+        // We will add a log here to prove dbRef is NOT null.
+        if (dbRef != null)
+        {
+            Debug.Log($"GameManager [ID: {gameObject.GetInstanceID()}] CONFIRMS: dbRef is now INITIALIZED and NOT NULL.");
+        }
+        else
+        {
+            Debug.LogError($"GameManager [ID: {gameObject.GetInstanceID()}] FAILED to initialize dbRef!");
+        }
     }
 
     #endregion
@@ -87,7 +138,7 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void HostNewRoom(TreasureSetData treasureSet)
     {
-        if (!isInitialized || AuthManager.Instance.User == null)
+        if (!isFirebaseReady || AuthManager.Instance.User == null)
         {
             Debug.LogError("GameManager or Auth not ready!");
             return;
@@ -103,18 +154,21 @@ public class GameManager : MonoBehaviour
         );
 
         // Copy treasures from the set to the new room's gameState.
-        foreach (var treasurePair in treasureSet.treasures)
+        foreach (var treasure in treasureSet.treasures)
         {
+            // We need a unique key for the live game state, so we generate one.
+            string liveTreasureKey = dbRef.Child("rooms").Child(CurrentRoomId).Child("gameState").Push().Key;
+
             // Create a new instance to avoid reference issues.
             var liveTreasure = new TreasureManagerGPS_Multiplayer.TreasureData
             {
-                name = treasurePair.Value.name,
-                lat = treasurePair.Value.lat,
-                lon = treasurePair.Value.lon,
-                points = treasurePair.Value.points,
-                collectedBy = new Dictionary<string, bool>() // Ensure it's initialized
+                name = treasure.name,
+                lat = treasure.lat,
+                lon = treasure.lon,
+                points = treasure.points,
+                collectedBy = new Dictionary<string, bool>()
             };
-            newRoom.gameState[treasurePair.Key] = liveTreasure;
+            newRoom.gameState[liveTreasureKey] = liveTreasure; // The live game still uses a Dictionary for fast lookups.
         }
 
         // Add the host as the first player.
@@ -139,7 +193,7 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void JoinRoomById(string roomId)
     {
-        if (!isInitialized || AuthManager.Instance.User == null) return;
+        if (!isFirebaseReady || AuthManager.Instance.User == null) return;
 
         IsHost = false;
         CurrentRoomId = roomId.ToUpper(); // Standardize to uppercase.
@@ -304,47 +358,88 @@ public class GameManager : MonoBehaviour
 
     public void SaveNewTreasureSet(string setName)
     {
+        Debug.Log("--- SaveNewTreasureSet START ---");
+
+        if (!isFirebaseReady)
+        {
+            Debug.LogWarning("Firebase not ready yet — delaying save attempt...");
+            StartCoroutine(RetrySaveTreasureSet(setName));
+            return;
+        }
+
+
+        // --- BREADCRUMB 1: Check for null references ---
+        if (dbRef == null)
+        {
+            Debug.LogError("FATAL: dbRef is NULL. The Firebase Database reference was not initialized.");
+            return; // Stop execution
+        }
+        if (AuthManager.Instance == null)
+        {
+            Debug.LogError("FATAL: AuthManager.Instance is NULL. The AuthManager is missing.");
+            return; // Stop execution
+        }
+        if (AuthManager.Instance.User == null)
+        {
+            Debug.LogError("FATAL: AuthManager.Instance.User is NULL. The user is not signed in.");
+            return; // Stop execution
+        }
+        Debug.Log("BREADCRUMB 1 PASSED: All manager references are valid.");
+
+        // --- BREADCRUMB 2: Check for valid data ---
         if (newSetTreasure.Count == 0)
         {
             Debug.LogError("No treasures to save.");
             return;
         }
+        Debug.Log($"BREADCRUMB 2 PASSED: Found {newSetTreasure.Count} treasures to save.");
 
-        // 1. Create a unique ID for the new set
+        // --- BREADCRUMB 3: Prepare the data object ---
         string newSetId = dbRef.Child("treasureSets").Push().Key;
-
-        // 2. Create the main TreasureSetData object
         TreasureSetData newSet = new TreasureSetData
         {
             setId = newSetId,
             setName = setName,
-            createdBy = AuthManager.Instance.UserId
+            createdBy = AuthManager.Instance.UserId,
+            treasures = this.newSetTreasure
         };
+        Debug.Log("BREADCRUMB 3 PASSED: TreasureSetData object created successfully.");
 
-        // 3. Loop through the temp list and add them to the dictionary with unique keys
-        foreach (var treasureData in newSetTreasure)
-        {
-            string treasureKey = dbRef.Child("treasureSets").Child(newSetId).Child("treasures").Push().Key;
-            newSet.treasures[treasureKey] = treasureData;
-        }
-
-        // 4. Convert to JSON and save to Firebase
+        // --- BREADCRUMB 4: Convert to JSON and save ---
         string json = JsonUtility.ToJson(newSet);
+        Debug.Log("BREADCRUMB 4 PASSED: Data converted to JSON. Sending to Firebase...");
+
         dbRef.Child("treasureSets").Child(newSetId).SetRawJsonValueAsync(json).ContinueWithOnMainThread(task =>
         {
             if (task.IsFaulted)
             {
-                Debug.LogError("Failed to save treasure set: " + task.Exception);
-                // Optionally re-enable the save button here
+                Debug.LogError("BREADCRUMB 5 FAILED: Failed to save treasure set: " + task.Exception);
             }
             else
             {
-                Debug.Log($"Treasure set '{setName}' saved successfully!");
-                // On success, exit the creator mode and return to the menu
+                Debug.Log("BREADCRUMB 5 SUCCESS: Treasure set saved successfully!");
                 ExitCreatorMode();
             }
         });
+
+        Debug.Log("--- SaveNewTreasureSet END ---");
     }
+
+    private IEnumerator RetrySaveTreasureSet(string setName)
+    {
+        float timeout = 5f;
+        while (!isFirebaseReady && timeout > 0f)
+        {
+            yield return new WaitForSeconds(0.5f);
+            timeout -= 0.5f;
+        }
+
+        if (isFirebaseReady)
+            SaveNewTreasureSet(setName);
+        else
+            Debug.LogError("Firebase never became ready in time.");
+    }
+
 
     public void ReturnToMenu()
     {
@@ -376,7 +471,7 @@ public class TreasureSetData
     public string setId;
     public string setName;
     public string createdBy;
-    public Dictionary<string, TreasureManagerGPS_Multiplayer.TreasureData> treasures = new Dictionary<string, TreasureManagerGPS_Multiplayer.TreasureData>();
+    public List<TreasureManagerGPS_Multiplayer.TreasureData> treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
 }
 
 [Serializable]

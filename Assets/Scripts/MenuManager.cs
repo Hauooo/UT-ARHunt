@@ -7,7 +7,6 @@ public class MenuManager : MonoBehaviour
     public GameObject joinRoomPanel;
     public GameObject createRoomPanel;
     public GameObject lobbyPanel;
-    public GameObject creatorPanel;
 
     
 

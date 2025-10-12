@@ -9,58 +9,66 @@ public class CreatorManager : MonoBehaviour
     [SerializeField] private Button saveSetButton;
     [SerializeField] private Button confirmSaveButton;
     [SerializeField] private Button backToMenuButton;
+    [SerializeField] private Button cancelButton;
+
     [SerializeField] private TMP_Text treasureCountText;
     [SerializeField] private GameObject savePanel;
     [SerializeField] private TMP_InputField setNameInput;
 
-    // References to our singleton managers
+    // This is our safe, private reference. The "Airlock".
     private GameManager gameManager;
     private LocationManager locationManager;
 
     void Start()
     {
-        // Get the instances of our persistent managers
         gameManager = GameManager.Instance;
         locationManager = LocationManager.Instance;
 
-        // Make sure we are in the correct mode
-        if (gameManager == null || gameManager.CurrentMode != GameMode.CreatingSet)
+        if (gameManager == null)
         {
-            Debug.LogError("CreatorScene loaded in wrong mode or GameManager is missing!");
-            // Fallback to return to menu
-            if (gameManager != null) gameManager.ReturnToMenu();
+            Debug.LogError("No GameManager instance found in scene!");
             return;
         }
 
-        // Wire up the button clicks
+        Debug.Log($"CreatorManager linked to GameManager ID: {gameManager.GetInstanceID()} (Scene: {gameManager.gameObject.scene.name})");
+
+        if (gameManager.CurrentMode != GameMode.CreatingSet)
+        {
+            Debug.LogWarning("CreatorScene loaded in wrong mode. Returning to menu...");
+            gameManager.ReturnToMenu();
+            return;
+        }
+
+        // Wire up buttons
         placeTreasureButton.onClick.AddListener(PlaceTreasure);
         saveSetButton.onClick.AddListener(ShowSavePanel);
         confirmSaveButton.onClick.AddListener(ConfirmSave);
-        backToMenuButton.onClick.AddListener(gameManager.ExitCreatorMode); // Use the GameManager's exit function
+        backToMenuButton.onClick.AddListener(gameManager.ExitCreatorMode);
+        cancelButton.onClick.AddListener(CancelSave);
 
         savePanel.SetActive(false);
         UpdateUI();
     }
 
+
     private void PlaceTreasure()
     {
-        // Check if GPS is ready
         if (locationManager.Status != LocationManager.LocationStatus.Ready)
         {
             Debug.LogWarning("Location is not ready yet.");
             return;
         }
 
-        // Create a new treasure data object with the current location
         var newTreasure = new TreasureManagerGPS_Multiplayer.TreasureData
         {
+            // Use the safe, cached reference
             name = $"Treasure #{gameManager.newSetTreasure.Count + 1}",
             lat = locationManager.Latitude,
             lon = locationManager.Longitude,
-            points = 100 // Default points, can be changed later
+            points = 100
         };
 
-        // Add it to the temporary list held by the GameManager
+        // Use the safe, cached reference
         gameManager.newSetTreasure.Add(newTreasure);
 
         Debug.Log($"Placed treasure at ({newTreasure.lat}, {newTreasure.lon})");
@@ -69,6 +77,7 @@ public class CreatorManager : MonoBehaviour
 
     private void ShowSavePanel()
     {
+        // Use the safe, cached reference
         if (gameManager.newSetTreasure.Count == 0)
         {
             Debug.LogWarning("Cannot save an empty set. Place at least one treasure.");
@@ -79,6 +88,9 @@ public class CreatorManager : MonoBehaviour
 
     private void ConfirmSave()
     {
+        // Final verification log
+        Debug.LogWarning($"--- ConfirmSave called. Using cached gameManager with ID: {gameManager.GetInstanceID()} ---");
+
         string setName = setNameInput.text;
         if (string.IsNullOrWhiteSpace(setName))
         {
@@ -86,15 +98,23 @@ public class CreatorManager : MonoBehaviour
             return;
         }
 
-        // Tell the GameManager to handle the Firebase save operation
         gameManager.SaveNewTreasureSet(setName);
+        confirmSaveButton.interactable = false;
+    }
 
-        // The GameManager will handle returning to the menu upon successful save.
-        confirmSaveButton.interactable = false; // Prevent double clicks
+    public void CancelSave()
+    {
+        savePanel.SetActive(false);
+        confirmSaveButton.interactable = true;
     }
 
     private void UpdateUI()
     {
+        // Use the safe, cached reference
         treasureCountText.text = $"Treasures Placed: {gameManager.newSetTreasure.Count}";
     }
+
+    // Add this entire method to your GameManager.cs script
+
+    
 }
