@@ -20,21 +20,30 @@ public class AuthManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            Debug.Log($"[Auth] AuthManager Awake() instance created. Scene={gameObject.scene.name} id={GetInstanceID()}");
         }
         else
         {
+            Debug.LogWarning($"[Auth] Duplicate AuthManager destroyed. Scene={gameObject.scene.name} id={GetInstanceID()}");
             Destroy(gameObject);
         }
     }
 
     void Start()
     {
-        // First, check Firebase dependencies.
+        Debug.Log($"[Auth] Start() begin dependency check. Scene={gameObject.scene.name} id={GetInstanceID()}");
+
         FirebaseApp.CheckAndFixDependenciesAsync().ContinueWithOnMainThread(task =>
         {
+            if (task.IsFaulted || task.IsCanceled)
+            {
+                Debug.LogError("[Auth] Dependency check faulted/canceled: " + task.Exception);
+                return;
+            }
+
+            Debug.Log($"[Auth] Dependency status={task.Result}");
             if (task.Result == DependencyStatus.Available)
             {
-                // If dependencies are fine, attempt to sign in.
                 SignInAnonymously();
             }
             else
@@ -46,20 +55,19 @@ public class AuthManager : MonoBehaviour
 
     private void SignInAnonymously()
     {
-        Debug.Log("Attempting to sign in anonymously...");
+        Debug.Log("[Auth] Attempting to sign in anonymously...");
         FirebaseAuth.DefaultInstance.SignInAnonymouslyAsync().ContinueWithOnMainThread(task =>
         {
             if (task.IsCanceled || task.IsFaulted)
             {
-                Debug.LogError("Anonymous sign-in failed: " + task.Exception);
+                Debug.LogError("[Auth] Anonymous sign-in failed: " + task.Exception);
                 return;
             }
 
-            // Sign-in successful
             User = task.Result.User;
-            Debug.Log($"Sign-in successful! User ID: {User.UserId}");
+            Debug.Log($"[Auth] Sign-in successful. UserId={User.UserId} IsAnonymous={User.IsAnonymous}");
 
-            // Fire the event to let other managers (like TreasureManager) know we are ready.
+            Debug.Log("[Auth] Firing OnSignedIn event.");
             OnSignedIn?.Invoke(User);
         });
     }

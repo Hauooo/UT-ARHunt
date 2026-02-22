@@ -6,9 +6,9 @@ public class MenuManager : MonoBehaviour
     public GameObject mainMenuPanel;
     public GameObject joinRoomPanel;
     public GameObject createRoomPanel;
-    public GameObject lobbyPanel;
 
-    
+    public GameObject hostLobbyPanel;
+    public GameObject roomLobbyPanel;
 
     [HideInInspector] public GameObject activePanel;
 
@@ -34,21 +34,29 @@ public class MenuManager : MonoBehaviour
             activePanel.SetActive(false);
 
         activePanel = panel;
-        panel.SetActive(true);
+
+        if (activePanel == null)
+        {
+            Debug.LogError("[MenuManager] Tried to show a NULL panel. Check Inspector references.");
+            return;
+        }
+
+        activePanel.SetActive(true);
     }
 
     public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
     public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
     public void OnBackButton() => ShowPanel(mainMenuPanel);
-    public void OnLobbyButton() => ShowPanel(lobbyPanel);
+
+    // If you want a button to open the room lobby explicitly:
+    public void OnLobbyButton() => ShowPanel(roomLobbyPanel);
 
     public void OnCreatorButton() => GameManager.Instance.StartCreatorMode();
 
-    // --- Handlers for GameManager events ---
     private void HandleLobbyReady(string roomId, bool isHost)
     {
-        Debug.Log($"Lobby ready! Room ID: {roomId}");
-        ShowPanel(lobbyPanel);
+        Debug.Log($"Lobby ready! Room ID: {roomId} isHost={isHost}");
+        ShowPanel(roomLobbyPanel);
     }
 
     private void HandleJoinFailed(string reason)

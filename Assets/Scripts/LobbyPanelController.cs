@@ -9,25 +9,39 @@ public class LobbyPanelController : MonoBehaviour
     [SerializeField] private TMP_Text roomCodeText;
     [SerializeField] private Button startGameButton;
     [SerializeField] private Button leaveButton;
-    [SerializeField] private Transform playerListContent; // Parent for player names
-    [SerializeField] private GameObject playerListItemPrefab; // A simple prefab with a TMP_Text
+    [SerializeField] private Transform playerListContent;
+    [SerializeField] private GameObject playerListItemPrefab;
 
     private bool isTheHost = false;
 
     private void OnEnable()
     {
-        // Subscribe to events when the panel becomes active
+        // Subscribe to events
         GameManager.Instance.OnLobbyReady += HandleLobbyReady;
         GameManager.Instance.OnPlayerListUpdated += HandlePlayerListUpdated;
 
-        // Hook up buttons to the GameManager
+        // Avoid stacking listeners
+        startGameButton.onClick.RemoveAllListeners();
+        leaveButton.onClick.RemoveAllListeners();
+
         startGameButton.onClick.AddListener(() => GameManager.Instance.StartGame());
         leaveButton.onClick.AddListener(() => GameManager.Instance.LeaveRoom());
+
+        // IMPORTANT: Refresh immediately in case OnLobbyReady already fired
+        var gm = GameManager.Instance;
+        if (gm != null && !string.IsNullOrEmpty(gm.CurrentRoomId))
+        {
+            HandleLobbyReady(gm.CurrentRoomId, gm.IsHost);
+        }
+        else
+        {
+            roomCodeText.text = "Room Code: ...";
+            startGameButton.gameObject.SetActive(false);
+        }
     }
 
     private void OnDisable()
     {
-        // IMPORTANT: Unsubscribe when the panel is hidden to prevent errors
         if (GameManager.Instance != null)
         {
             GameManager.Instance.OnLobbyReady -= HandleLobbyReady;
@@ -37,27 +51,21 @@ public class LobbyPanelController : MonoBehaviour
 
     private void HandleLobbyReady(string roomId, bool isHost)
     {
-        // This is called once when we first enter the lobby
         roomCodeText.text = $"Room Code: {roomId}";
         isTheHost = isHost;
-        startGameButton.gameObject.SetActive(isTheHost); // Only the host can start the game
+        startGameButton.gameObject.SetActive(isTheHost);
     }
 
     private void HandlePlayerListUpdated(Dictionary<string, PlayerData> players)
     {
-        // This is called every time a player joins or leaves
-
-        // Clear the old list
         foreach (Transform child in playerListContent)
         {
             Destroy(child.gameObject);
         }
 
-        // Repopulate the list with the latest data
         foreach (var player in players.Values)
         {
             GameObject newPlayerItem = Instantiate(playerListItemPrefab, playerListContent);
-            // Assuming your prefab has a TMP_Text component as its root or child
             newPlayerItem.GetComponentInChildren<TMP_Text>().text = player.displayName;
         }
     }

@@ -8,33 +8,45 @@ using System.Collections.Generic;
 public class HostLobbyController : MonoBehaviour
 {
     [Header("UI Elements")]
-    [SerializeField] private GameObject setListItemPrefab; // Your prefab with a Button and a TMP_Text
-    [SerializeField] private Transform contentParent;      // The "Content" object of your ScrollView
+    [SerializeField] private GameObject setListItemPrefab;
+    [SerializeField] private Transform contentParent;
     [SerializeField] private Button hostButton;
     [SerializeField] private Button backButton;
     [SerializeField] private TMP_Text feedbackText;
 
+    [Header("Firebase")]
+    [SerializeField]
+    private string firebaseDatabaseUrl =
+        "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
     private DatabaseReference dbRef;
     private AuthManager authManager;
 
-    // Store all loaded sets so we can easily find the selected one
     private Dictionary<string, TreasureSetData> availableSets = new Dictionary<string, TreasureSetData>();
     private TreasureSetData selectedSet;
 
-    void Start()
+    private void Awake()
     {
-        dbRef = FirebaseDatabase.DefaultInstance.RootReference;
         authManager = AuthManager.Instance;
 
-        hostButton.onClick.AddListener(OnHostButtonClicked);
-        // Assuming your MenuManager has a public method to show the main menu
-        // backButton.onClick.AddListener(() => MenuManager.Instance.ShowPanel(MenuManager.Instance.mainMenuPanel));
+        try
+        {
+            dbRef = FirebaseDatabase.GetInstance(firebaseDatabaseUrl).RootReference;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("[HostLobbyController] Failed to init FirebaseDatabase: " + ex);
+            dbRef = null;
+        }
+    }
 
-        hostButton.interactable = false; // Disable until a set is chosen
+    void Start()
+    {
+        hostButton.onClick.AddListener(OnHostButtonClicked);
+        hostButton.interactable = false;
         feedbackText.text = "Loading your treasure sets...";
     }
 
-    // This is called when the panel is set to active
     private void OnEnable()
     {
         FetchPlayerTreasureSets();
@@ -42,54 +54,74 @@ public class HostLobbyController : MonoBehaviour
 
     private void FetchPlayerTreasureSets()
     {
-        // Clear previous list items
-        foreach (Transform child in contentParent)
+        if (feedbackText != null) feedbackText.text = "Loading your treasure sets...";
+
+        if (authManager == null)
         {
-            Destroy(child.gameObject);
+            Debug.LogError("[HostLobbyController] AuthManager is null.");
+            if (feedbackText != null) feedbackText.text = "Auth not ready.";
+            return;
         }
+
+        if (dbRef == null)
+        {
+            Debug.LogError("[HostLobbyController] dbRef is null (Firebase DB not configured).");
+            if (feedbackText != null) feedbackText.text = "Database not ready.";
+            return;
+        }
+
+        // Clear previous list items
+        foreach (Transform child in contentParent) Destroy(child.gameObject);
         availableSets.Clear();
+        selectedSet = null;
+        hostButton.interactable = false;
 
         string myUserId = authManager.UserId;
-        if (string.IsNullOrEmpty(myUserId)) return;
-
-        // Query Firebase for all treasure sets created by the current user
-        dbRef.Child("treasureSets").OrderByChild("createdBy").EqualTo(myUserId).GetValueAsync().ContinueWithOnMainThread(task =>
+        if (string.IsNullOrEmpty(myUserId))
         {
-            if (task.IsFaulted)
-            {
-                feedbackText.text = "Error loading sets.";
-                Debug.LogError("Error fetching treasure sets: " + task.Exception);
-                return;
-            }
+            Debug.LogWarning("[HostLobbyController] UserId empty; waiting for sign-in.");
+            if (feedbackText != null) feedbackText.text = "Signing in... please wait.";
+            return;
+        }
 
-            DataSnapshot snapshot = task.Result;
-            if (!snapshot.Exists)
+        dbRef.Child("treasureSets")
+            .OrderByChild("createdBy")
+            .EqualTo(myUserId)
+            .GetValueAsync()
+            .ContinueWithOnMainThread(task =>
             {
-                feedbackText.text = "You haven't created any treasure sets yet!";
-                return;
-            }
+                if (task.IsFaulted)
+                {
+                    if (feedbackText != null) feedbackText.text = "Error loading sets.";
+                    Debug.LogError("Error fetching treasure sets: " + task.Exception);
+                    return;
+                }
 
-            // Populate the list with the fetched sets
-            PopulateSetList(snapshot);
-        });
+                DataSnapshot snapshot = task.Result;
+                if (!snapshot.Exists)
+                {
+                    if (feedbackText != null) feedbackText.text = "You haven't created any treasure sets yet!";
+                    return;
+                }
+
+                PopulateSetList(snapshot);
+            });
     }
 
     private void PopulateSetList(DataSnapshot snapshot)
     {
         feedbackText.text = "Choose a set to host:";
+
         foreach (var childSnapshot in snapshot.Children)
         {
             string json = childSnapshot.GetRawJsonValue();
             TreasureSetData setData = JsonUtility.FromJson<TreasureSetData>(json);
 
-            // Store it for later
             availableSets[setData.setId] = setData;
 
-            // Create a UI item for it
             GameObject listItem = Instantiate(setListItemPrefab, contentParent);
             listItem.GetComponentInChildren<TMP_Text>().text = setData.setName;
 
-            // Add a listener to the button on the prefab
             listItem.GetComponent<Button>().onClick.AddListener(() => SelectSet(setData));
         }
     }
@@ -99,8 +131,6 @@ public class HostLobbyController : MonoBehaviour
         selectedSet = setData;
         hostButton.interactable = true;
         feedbackText.text = $"Selected: {setData.setName}";
-        Debug.Log($"Selected Treasure Set: {setData.setName} ({setData.setId})");
-        // You could also add a visual indicator (like changing the color) for the selected item
     }
 
     private void OnHostButtonClicked()
@@ -111,11 +141,10 @@ public class HostLobbyController : MonoBehaviour
             return;
         }
 
-        // We have a set, now we tell the GameManager to create the room!
         GameManager.Instance.HostNewRoom(selectedSet);
 
-        // The GameManager's OnLobbyReady event will then be handled by your MenuManager
-        // to switch to the lobby panel.
-        gameObject.SetActive(false); // Hide this panel
+        // Don't force-disable the panel here unless you really want to.
+        // MenuManager will switch panels on OnLobbyReady anyway.
+        // gameObject.SetActive(false);
     }
 }

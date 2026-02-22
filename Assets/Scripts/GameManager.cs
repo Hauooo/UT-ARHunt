@@ -42,6 +42,10 @@ public class GameManager : MonoBehaviour
     // --- Private State ---
     private DatabaseReference dbRef;
     private bool isFirebaseReady = false;
+    private bool firebaseInitStarted = false;
+    private DependencyStatus lastDependencyStatus = DependencyStatus.UnavailableOther;
+    private string lastFirebaseInitError = null;
+    private string lastFirebaseInitState = "Not started";
 
     #region --- Unity Methods ---
 
@@ -110,22 +114,28 @@ public class GameManager : MonoBehaviour
         {
             AuthManager.Instance.OnSignedIn -= HandleAuthReady;
         }
+        SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
+    // Replace your current HandleAuthReady with this version.
     private void HandleAuthReady(Firebase.Auth.FirebaseUser user)
     {
-        Debug.Log($"GameManager [ID: {gameObject.GetInstanceID()}] received 'OnSignedIn' signal. Initializing Firebase Database.");
-        dbRef = FirebaseDatabase.DefaultInstance.RootReference;
-        isFirebaseReady = true;
+        Debug.Log($"[GameManager] HandleAuthReady received. FirebaseUserUid={user?.UserId}");
 
-        // We will add a log here to prove dbRef is NOT null.
-        if (dbRef != null)
+        try
         {
-            Debug.Log($"GameManager [ID: {gameObject.GetInstanceID()}] CONFIRMS: dbRef is now INITIALIZED and NOT NULL.");
+            dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+            isFirebaseReady = (dbRef != null);
+
+            Debug.Log($"[GameManager] Firebase DB init in HandleAuthReady: isFirebaseReady={isFirebaseReady}, dbRefNull={dbRef == null}");
+            if (!isFirebaseReady)
+                Debug.LogError("[GameManager] dbRef is null after sign-in. Check Firebase database configuration.");
         }
-        else
+        catch (Exception ex)
         {
-            Debug.LogError($"GameManager [ID: {gameObject.GetInstanceID()}] FAILED to initialize dbRef!");
+            isFirebaseReady = false;
+            dbRef = null;
+            Debug.LogError("[GameManager] Exception initializing Firebase database: " + ex);
         }
     }
 
@@ -138,9 +148,10 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void HostNewRoom(TreasureSetData treasureSet)
     {
+        EnsureFirebaseReady("HostNewRoom");
         if (!isFirebaseReady || AuthManager.Instance.User == null)
         {
-            Debug.LogError("GameManager or Auth not ready!");
+            Debug.LogError($"HostNewRoom blocked. isFirebaseReady={isFirebaseReady}, userNull={AuthManager.Instance?.User == null}, lastErr={lastFirebaseInitError}");
             return;
         }
 
@@ -193,7 +204,15 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void JoinRoomById(string roomId)
     {
-        if (!isFirebaseReady || AuthManager.Instance.User == null) return;
+        EnsureFirebaseReady("JoinRoomById");
+        if (!isFirebaseReady || AuthManager.Instance.User == null)
+
+        {
+            OnJoinFailed?.Invoke("Not signed in or Firebase not ready yet.");
+            Debug.LogError($"JoinRoomById blocked. isFirebaseReady={isFirebaseReady}, userNull={AuthManager.Instance?.User == null}, lastErr={lastFirebaseInitError}");
+            return;
+        }
+        ;
 
         IsHost = false;
         CurrentRoomId = roomId.ToUpper(); // Standardize to uppercase.
@@ -302,6 +321,53 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    private void EnsureFirebaseReady(string caller)
+    {
+        if (isFirebaseReady)
+        {
+            Debug.Log($"[FirebaseInit] ({caller}) already ready.");
+            return;
+        }
+
+        if (AuthManager.Instance == null)
+        {
+            lastFirebaseInitState = "AuthManager.Instance null";
+            Debug.LogError($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
+            return;
+        }
+
+        if (AuthManager.Instance.User == null)
+        {
+            lastFirebaseInitState = "Waiting for Auth sign-in (User is null)";
+            Debug.LogWarning($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
+            return;
+        }
+
+        // Auth is ready; initialize dbRef if needed.
+        if (dbRef == null)
+        {
+            lastFirebaseInitState = "Auth ready -> initializing dbRef";
+            Debug.Log($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
+
+            try
+            {
+                dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+            }
+            catch (Exception ex)
+            {
+                lastFirebaseInitState = "Exception creating dbRef: " + ex.Message;
+                Debug.LogError($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
+                return;
+            }
+        }
+
+        isFirebaseReady = (dbRef != null);
+        lastFirebaseInitState = isFirebaseReady ? "READY" : "dbRef still null";
+        Debug.Log($"[FirebaseInit] ({caller}) Completed. {lastFirebaseInitState}");
+    }
+
+
+
     #endregion
 
     #region --- Scene Management ---
@@ -360,10 +426,19 @@ public class GameManager : MonoBehaviour
     {
         Debug.Log("--- SaveNewTreasureSet START ---");
 
+        EnsureFirebaseReady("SaveNewTreasureSet");
+
         if (!isFirebaseReady)
         {
-            Debug.LogWarning("Firebase not ready yet — delaying save attempt...");
+            Debug.LogWarning($"Firebase not ready yet. state={lastFirebaseInitState}. Delaying save attempt...");
             StartCoroutine(RetrySaveTreasureSet(setName));
+            return;
+        }
+
+        // (also add the UserId empty check here)
+        if (string.IsNullOrEmpty(AuthManager.Instance.UserId))
+        {
+            Debug.LogError("FATAL: UserId empty. Cannot save.");
             return;
         }
 
@@ -384,6 +459,13 @@ public class GameManager : MonoBehaviour
             Debug.LogError("FATAL: AuthManager.Instance.User is NULL. The user is not signed in.");
             return; // Stop execution
         }
+        if (string.IsNullOrEmpty(AuthManager.Instance.UserId))
+        {
+            Debug.LogError("FATAL: AuthManager.Instance.UserId is empty. Cannot save treasure set because 'createdBy' would be blank.");
+            return;
+        }
+
+        Debug.Log($"Auth OK. Saving as UserId={AuthManager.Instance.UserId}");
         Debug.Log("BREADCRUMB 1 PASSED: All manager references are valid.");
 
         // --- BREADCRUMB 2: Check for valid data ---
@@ -427,9 +509,11 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator RetrySaveTreasureSet(string setName)
     {
-        float timeout = 5f;
+        float timeout = 30f; // was 5
         while (!isFirebaseReady && timeout > 0f)
         {
+            EnsureFirebaseReady("RetrySaveTreasureSet");
+            Debug.Log($"[RetrySave] waiting... t={timeout:0.0}s state={lastFirebaseInitState}");
             yield return new WaitForSeconds(0.5f);
             timeout -= 0.5f;
         }
@@ -437,7 +521,7 @@ public class GameManager : MonoBehaviour
         if (isFirebaseReady)
             SaveNewTreasureSet(setName);
         else
-            Debug.LogError("Firebase never became ready in time.");
+            Debug.LogError($"Firebase never became ready in time. state={lastFirebaseInitState}");
     }
 
 

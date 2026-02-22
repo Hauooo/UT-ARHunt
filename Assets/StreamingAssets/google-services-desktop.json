@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "512419556913",
+    "firebase_url": "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "ut-ar-treasure-hunt",
     "storage_bucket": "ut-ar-treasure-hunt.firebasestorage.app"
   },
@@ -12,7 +13,12 @@
           "package_name": "com.unity.template.ar_mobile"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "512419556913-orhlr03psijhhlst65dsp61d41li2e23.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAYvYqnvkw9v851QHPma1K25fG46v_snDY"
@@ -20,7 +26,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "512419556913-orhlr03psijhhlst65dsp61d41li2e23.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
