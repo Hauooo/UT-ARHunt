@@ -9,16 +9,24 @@ public class JoinRoomPanelController : MonoBehaviour
     [SerializeField] private Button joinButton;
     [SerializeField] private TMP_Text feedbackText;
 
-    // We'll wire up the 'Back' button in the Inspector to call MenuManager.OnBackButton()
-
     private void Awake()
     {
-        joinButton.onClick.AddListener(OnJoinButtonClicked);
+        if (joinButton == null) Debug.LogError("[JoinRoomPanel] joinButton is not assigned.");
+        if (roomCodeInput == null) Debug.LogError("[JoinRoomPanel] roomCodeInput is not assigned.");
+        if (feedbackText == null) Debug.LogError("[JoinRoomPanel] feedbackText is not assigned.");
+
+        if (joinButton != null)
+        {
+            joinButton.onClick.RemoveAllListeners();
+            joinButton.onClick.AddListener(OnJoinButtonClicked);
+        }
     }
 
     private void OnEnable()
     {
-        // Reset the panel every time it's shown
+        if (roomCodeInput == null || feedbackText == null || joinButton == null)
+            return;
+
         roomCodeInput.text = "";
         feedbackText.text = "Enter a 4-digit room code.";
         joinButton.interactable = true;
@@ -26,7 +34,10 @@ public class JoinRoomPanelController : MonoBehaviour
 
     private void OnJoinButtonClicked()
     {
-        string roomCode = roomCodeInput.text.Trim().ToUpper();
+        if (roomCodeInput == null || feedbackText == null || joinButton == null)
+            return;
+
+        string roomCode = roomCodeInput.text.Trim().ToUpperInvariant();
 
         if (string.IsNullOrWhiteSpace(roomCode) || roomCode.Length != 4)
         {
@@ -34,12 +45,16 @@ public class JoinRoomPanelController : MonoBehaviour
             return;
         }
 
-        // Give immediate feedback and prevent spam clicks
         joinButton.interactable = false;
         feedbackText.text = $"Joining room {roomCode}...";
 
-        // Ask the GameManager to handle the rest.
-        // The MenuManager will listen for success/failure and switch panels.
+        if (GameManager.Instance == null)
+        {
+            feedbackText.text = "GameManager not ready.";
+            joinButton.interactable = true;
+            return;
+        }
+
         GameManager.Instance.JoinRoomById(roomCode);
     }
 }

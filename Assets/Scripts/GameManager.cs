@@ -23,9 +23,14 @@ public class GameManager : MonoBehaviour
     public static GameManager Instance;
 
     [Header("Scene Configuration")]
-    [SerializeField] private string arSceneName = "ARScene"; // Set this to the name of your AR scene in the Inspector
+    [SerializeField] private string arSceneName = "ARScene";
 
-    public GameMode CurrentMode { get; private set; }
+    [Header("Firebase")]
+    [SerializeField]
+    private string firebaseDatabaseUrl =
+        "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
+    public GameMode CurrentMode { get; private set; } = GameMode.InMenu;
 
     public List<TreasureManagerGPS_Multiplayer.TreasureData> newSetTreasure = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
 
@@ -33,8 +38,7 @@ public class GameManager : MonoBehaviour
     public string CurrentRoomId { get; private set; }
     public bool IsHost { get; private set; }
 
-    // Events for the UI to subscribe to, decoupling the UI from the GameManager.
-    public event Action<string, bool> OnLobbyReady; // string: roomId, bool: isHost
+    public event Action<string, bool> OnLobbyReady; // roomId, isHost
     public event Action<Dictionary<string, PlayerData>> OnPlayerListUpdated;
     public event Action OnGameStarting;
     public event Action<string> OnJoinFailed;
@@ -42,8 +46,7 @@ public class GameManager : MonoBehaviour
     // --- Private State ---
     private DatabaseReference dbRef;
     private bool isFirebaseReady = false;
-    private bool firebaseInitStarted = false;
-    private DependencyStatus lastDependencyStatus = DependencyStatus.UnavailableOther;
+
     private string lastFirebaseInitError = null;
     private string lastFirebaseInitState = "Not started";
 
@@ -51,171 +54,191 @@ public class GameManager : MonoBehaviour
 
     private void Awake()
     {
-        string stackTrace = UnityEngine.StackTraceUtility.ExtractStackTrace();
-        Debug.LogError($"--- A GameManager just ran Awake() in scene '{gameObject.scene.name}' on GameObject: '{gameObject.name}' [ID: {gameObject.GetInstanceID()}] ---\nCreation Stack Trace:\n{stackTrace}", gameObject);
-
-        // Check FIRST — before doing anything else
+        // Singleton guard
         if (Instance != null && Instance != this)
         {
-            Debug.LogError($"Duplicate GameManager detected! Keeping ID: {Instance.GetInstanceID()}, destroying new ID: {this.GetInstanceID()} (Scene: {gameObject.scene.name})");
             Destroy(gameObject);
             return;
         }
 
-        // If we reach here, we are the one true instance
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
         // Subscribe to AuthManager
-        AuthManager.Instance.OnSignedIn += HandleAuthReady;
-
-        // If user already signed in, initialize immediately
-        if (AuthManager.Instance.User != null)
+        if (AuthManager.Instance != null)
         {
-            Debug.Log("AuthManager already has a signed-in user. Initializing Firebase immediately.");
-            HandleAuthReady(AuthManager.Instance.User);
+            AuthManager.Instance.OnSignedIn += HandleAuthReady;
+
+            if (AuthManager.Instance.User != null)
+            {
+                Debug.Log("AuthManager already signed in; initializing Firebase DB now.");
+                HandleAuthReady(AuthManager.Instance.User);
+            }
+        }
+        else
+        {
+            Debug.LogError("[GameManager] AuthManager.Instance is null in Awake().");
         }
     }
 
-
     private void Start()
     {
-        // --- REMOVE THIS ---
-        // We no longer initialize Firebase here.
-        // dbRef = FirebaseDatabase.DefaultInstance.RootReference;
-        // isInitialized = true;
-
         Debug.Log("GameManager initialized.");
     }
 
     private void OnEnable()
     {
-        var managers = FindObjectsOfType<GameManager>();
-        if (managers.Length > 1)
-        {
-            Debug.LogError($"[GameManager] {managers.Length} instances found! Destroying duplicates...");
-            foreach (var gm in managers)
-            {
-                if (gm != Instance)
-                    Destroy(gm.gameObject);
-            }
-        }
-        // Subscribe to the sceneLoaded event to know when the AR scene is ready.
         SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
     private void OnDestroy()
     {
-        // If this message appears, it is the smoking gun.
-        Debug.LogError($"!!! A GameManager instance [ID: {gameObject.GetInstanceID()}] was JUST DESTROYED !!! Is there another script loading scenes in a way that breaks DontDestroyOnLoad?", gameObject);
-
-        // Unsubscribe to prevent memory leaks
         if (AuthManager.Instance != null)
-        {
             AuthManager.Instance.OnSignedIn -= HandleAuthReady;
-        }
+
         SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
-    // Replace your current HandleAuthReady with this version.
     private void HandleAuthReady(Firebase.Auth.FirebaseUser user)
     {
-        Debug.Log($"[GameManager] HandleAuthReady received. FirebaseUserUid={user?.UserId}");
+        Debug.Log($"[GameManager] HandleAuthReady received. uid={user?.UserId}");
+        TryInitFirebaseDb("HandleAuthReady");
+    }
+
+    #endregion
+
+    #region --- Firebase Init ---
+
+    private void TryInitFirebaseDb(string caller)
+    {
+        if (isFirebaseReady && dbRef != null) return;
+
+        if (AuthManager.Instance == null || AuthManager.Instance.User == null)
+        {
+            lastFirebaseInitState = "Auth not ready";
+            Debug.LogWarning($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
+            return;
+        }
 
         try
         {
-            dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+            dbRef = FirebaseDatabase.GetInstance(firebaseDatabaseUrl).RootReference;
             isFirebaseReady = (dbRef != null);
-
-            Debug.Log($"[GameManager] Firebase DB init in HandleAuthReady: isFirebaseReady={isFirebaseReady}, dbRefNull={dbRef == null}");
-            if (!isFirebaseReady)
-                Debug.LogError("[GameManager] dbRef is null after sign-in. Check Firebase database configuration.");
+            lastFirebaseInitError = null;
+            lastFirebaseInitState = isFirebaseReady ? "READY" : "dbRef null";
         }
         catch (Exception ex)
         {
             isFirebaseReady = false;
             dbRef = null;
-            Debug.LogError("[GameManager] Exception initializing Firebase database: " + ex);
+            lastFirebaseInitError = ex.Message;
+            lastFirebaseInitState = "Exception: " + ex.Message;
         }
+
+        Debug.Log($"[FirebaseInit] ({caller}) state={lastFirebaseInitState} err={lastFirebaseInitError}");
+    }
+
+    private void EnsureFirebaseReady(string caller)
+    {
+        if (isFirebaseReady && dbRef != null) return;
+        TryInitFirebaseDb(caller);
     }
 
     #endregion
 
     #region --- Public API for UI ---
 
-    /// <summary>
-    /// Called by the UI when the user wants to host a new game.
-    /// </summary>
     public void HostNewRoom(TreasureSetData treasureSet)
     {
         EnsureFirebaseReady("HostNewRoom");
-        if (!isFirebaseReady || AuthManager.Instance.User == null)
+        if (!isFirebaseReady || AuthManager.Instance?.User == null)
         {
-            Debug.LogError($"HostNewRoom blocked. isFirebaseReady={isFirebaseReady}, userNull={AuthManager.Instance?.User == null}, lastErr={lastFirebaseInitError}");
+            Debug.LogError($"HostNewRoom blocked. ready={isFirebaseReady} userNull={AuthManager.Instance?.User == null} state={lastFirebaseInitState} err={lastFirebaseInitError}");
+            return;
+        }
+
+        if (treasureSet == null)
+        {
+            Debug.LogError("HostNewRoom failed: treasureSet is null.");
             return;
         }
 
         IsHost = true;
         CurrentRoomId = GenerateRoomCode();
+        CurrentMode = GameMode.PlayingInRoom;
 
-        RoomData newRoom = new RoomData(
-            AuthManager.Instance.UserId,
-            AuthManager.Instance.User.DisplayName ?? "The Host",
-            treasureSet.setId // Assuming TreasureSetData has an ID
-        );
+        var roomRef = dbRef.Child("rooms").Child(CurrentRoomId);
 
-        // Copy treasures from the set to the new room's gameState.
+        // Write room metadata (JsonUtility cannot serialize dictionaries, so do not write RoomData as one JSON blob)
+        var tasks = new List<System.Threading.Tasks.Task>();
+
+        tasks.Add(roomRef.Child("hostId").SetValueAsync(AuthManager.Instance.UserId));
+        tasks.Add(roomRef.Child("hostName").SetValueAsync(AuthManager.Instance.User.DisplayName ?? "The Host"));
+        tasks.Add(roomRef.Child("selectedSetId").SetValueAsync(treasureSet.setId));
+        tasks.Add(roomRef.Child("status").SetValueAsync("waiting"));
+
+        // Add host player
+        var hostPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "The Host", 0);
+        tasks.Add(roomRef.Child("players").Child(AuthManager.Instance.UserId)
+            .SetRawJsonValueAsync(JsonUtility.ToJson(hostPlayer)));
+
+        // Write treasure game state
+        var gameStateRef = roomRef.Child("gameState");
         foreach (var treasure in treasureSet.treasures)
         {
-            // We need a unique key for the live game state, so we generate one.
-            string liveTreasureKey = dbRef.Child("rooms").Child(CurrentRoomId).Child("gameState").Push().Key;
+            string liveTreasureKey = gameStateRef.Push().Key;
 
-            // Create a new instance to avoid reference issues.
             var liveTreasure = new TreasureManagerGPS_Multiplayer.TreasureData
             {
                 name = treasure.name,
                 lat = treasure.lat,
                 lon = treasure.lon,
                 points = treasure.points,
-                collectedBy = new Dictionary<string, bool>()
+                collectedBy = null // let it be missing initially; treat null as "not collected"
             };
-            newRoom.gameState[liveTreasureKey] = liveTreasure; // The live game still uses a Dictionary for fast lookups.
+
+            tasks.Add(gameStateRef.Child(liveTreasureKey)
+                .SetRawJsonValueAsync(JsonUtility.ToJson(liveTreasure)));
         }
 
-        // Add the host as the first player.
-        newRoom.players[AuthManager.Instance.UserId] = new PlayerData(AuthManager.Instance.User.DisplayName ?? "The Host", 0);
-
-        // Set the data in Firebase.
-        dbRef.Child("rooms").Child(CurrentRoomId).SetRawJsonValueAsync(JsonUtility.ToJson(newRoom)).ContinueWithOnMainThread(task =>
+        System.Threading.Tasks.Task.WhenAll(tasks).ContinueWithOnMainThread(t =>
         {
-            if (task.IsFaulted)
+            if (t.IsFaulted)
             {
-                Debug.LogError("Failed to host room: " + task.Exception);
+                Debug.LogError("Failed to host room: " + t.Exception);
                 return;
             }
+
             Debug.Log($"Room {CurrentRoomId} hosted successfully!");
             ListenToRoomUpdates(CurrentRoomId);
             OnLobbyReady?.Invoke(CurrentRoomId, true);
         });
     }
 
-    /// <summary>
-    /// Called by the UI when a player wants to join an existing game.
-    /// </summary>
     public void JoinRoomById(string roomId)
     {
         EnsureFirebaseReady("JoinRoomById");
-        if (!isFirebaseReady || AuthManager.Instance.User == null)
-
+        if (!isFirebaseReady || AuthManager.Instance?.User == null)
         {
             OnJoinFailed?.Invoke("Not signed in or Firebase not ready yet.");
-            Debug.LogError($"JoinRoomById blocked. isFirebaseReady={isFirebaseReady}, userNull={AuthManager.Instance?.User == null}, lastErr={lastFirebaseInitError}");
+            Debug.LogError($"JoinRoomById blocked. ready={isFirebaseReady} userNull={AuthManager.Instance?.User == null} state={lastFirebaseInitState} err={lastFirebaseInitError}");
             return;
         }
-        ;
 
         IsHost = false;
-        CurrentRoomId = roomId.ToUpper(); // Standardize to uppercase.
+        CurrentRoomId = roomId?.Trim().ToUpperInvariant();
+        CurrentMode = GameMode.PlayingInRoom;
+
+        if (string.IsNullOrEmpty(CurrentRoomId))
+        {
+            OnJoinFailed?.Invoke("Room code is empty.");
+            return;
+        }
 
         DatabaseReference roomRef = dbRef.Child("rooms").Child(CurrentRoomId);
         roomRef.GetValueAsync().ContinueWithOnMainThread(task =>
@@ -223,56 +246,70 @@ public class GameManager : MonoBehaviour
             if (task.IsFaulted)
             {
                 OnJoinFailed?.Invoke("Error checking room.");
+                Debug.LogError("JoinRoomById GetValueAsync faulted: " + task.Exception);
                 return;
             }
-            if (!task.Result.Exists || task.Result.Child("status").Value.ToString() != "waiting")
+
+            if (!task.Result.Exists)
+            {
+                OnJoinFailed?.Invoke($"Room {CurrentRoomId} does not exist.");
+                return;
+            }
+
+            string status = task.Result.Child("status").Value?.ToString();
+            if (status != "waiting")
             {
                 OnJoinFailed?.Invoke($"Room {CurrentRoomId} is not available to join.");
                 return;
             }
 
-            // Room is valid, add the player.
-            PlayerData newPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "A Player", 0);
-            roomRef.Child("players").Child(AuthManager.Instance.UserId).SetRawJsonValueAsync(JsonUtility.ToJson(newPlayer)).ContinueWithOnMainThread(joinTask =>
-            {
-                if (joinTask.IsFaulted)
+            var newPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "A Player", 0);
+            roomRef.Child("players").Child(AuthManager.Instance.UserId)
+                .SetRawJsonValueAsync(JsonUtility.ToJson(newPlayer))
+                .ContinueWithOnMainThread(joinTask =>
                 {
-                    OnJoinFailed?.Invoke("Failed to join room.");
-                    return;
-                }
-                Debug.Log($"Joined room {CurrentRoomId}!");
-                ListenToRoomUpdates(CurrentRoomId);
-                OnLobbyReady?.Invoke(CurrentRoomId, false);
-            });
+                    if (joinTask.IsFaulted)
+                    {
+                        OnJoinFailed?.Invoke("Failed to join room.");
+                        Debug.LogError("JoinRoomById add player faulted: " + joinTask.Exception);
+                        return;
+                    }
+
+                    Debug.Log($"Joined room {CurrentRoomId}!");
+                    ListenToRoomUpdates(CurrentRoomId);
+                    OnLobbyReady?.Invoke(CurrentRoomId, false);
+                });
         });
     }
 
-    /// <summary>
-    /// Called by the host from the UI to start the game for everyone.
-    /// </summary>
     public void StartGame()
     {
         if (!IsHost) return;
-        // This write will trigger HandleStatusChanged for all connected clients.
+        if (string.IsNullOrEmpty(CurrentRoomId)) return;
+
+        EnsureFirebaseReady("StartGame");
+        if (!isFirebaseReady) return;
+
         dbRef.Child("rooms").Child(CurrentRoomId).Child("status").SetValueAsync("in-progress");
     }
 
-    /// <summary>
-    /// Called when a player wants to leave the lobby or game.
-    /// </summary>
     public void LeaveRoom()
     {
         if (string.IsNullOrEmpty(CurrentRoomId)) return;
 
-        // Remove player from list. If host leaves, you might want to add logic to end the game.
+        EnsureFirebaseReady("LeaveRoom");
+        if (!isFirebaseReady) return;
+
         dbRef.Child("rooms").Child(CurrentRoomId).Child("players").Child(AuthManager.Instance.UserId).RemoveValueAsync();
 
         StopListeningToRoomUpdates();
+
         CurrentRoomId = null;
-        // Consider loading back to the main menu scene here.
+        IsHost = false;
+        CurrentMode = GameMode.InMenu;
+
         SceneManager.LoadScene("MenuScene");
     }
-
 
     #endregion
 
@@ -287,6 +324,7 @@ public class GameManager : MonoBehaviour
     private void StopListeningToRoomUpdates()
     {
         if (string.IsNullOrEmpty(CurrentRoomId)) return;
+
         dbRef.Child("rooms").Child(CurrentRoomId).Child("players").ValueChanged -= HandlePlayerListChanged;
         dbRef.Child("rooms").Child(CurrentRoomId).Child("status").ValueChanged -= HandleStatusChanged;
     }
@@ -295,7 +333,6 @@ public class GameManager : MonoBehaviour
     {
         if (!args.Snapshot.Exists) return;
 
-        // Manually parse the dictionary from Firebase into our strongly-typed class.
         var playersDict = new Dictionary<string, PlayerData>();
         foreach (var child in args.Snapshot.Children)
         {
@@ -311,62 +348,20 @@ public class GameManager : MonoBehaviour
     {
         if (!args.Snapshot.Exists) return;
 
-        string status = args.Snapshot.Value.ToString();
+        string status = args.Snapshot.Value?.ToString();
         if (status == "in-progress")
         {
             Debug.Log("Game is starting! Loading AR Scene.");
+            CurrentMode = GameMode.PlayingInRoom;
+
             OnGameStarting?.Invoke();
+
+            // OK to stop listening once we transition scenes (or keep if needed)
             StopListeningToRoomUpdates();
+
             SceneManager.LoadScene(arSceneName);
         }
     }
-
-    private void EnsureFirebaseReady(string caller)
-    {
-        if (isFirebaseReady)
-        {
-            Debug.Log($"[FirebaseInit] ({caller}) already ready.");
-            return;
-        }
-
-        if (AuthManager.Instance == null)
-        {
-            lastFirebaseInitState = "AuthManager.Instance null";
-            Debug.LogError($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
-            return;
-        }
-
-        if (AuthManager.Instance.User == null)
-        {
-            lastFirebaseInitState = "Waiting for Auth sign-in (User is null)";
-            Debug.LogWarning($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
-            return;
-        }
-
-        // Auth is ready; initialize dbRef if needed.
-        if (dbRef == null)
-        {
-            lastFirebaseInitState = "Auth ready -> initializing dbRef";
-            Debug.Log($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
-
-            try
-            {
-                dbRef = FirebaseDatabase.DefaultInstance.RootReference;
-            }
-            catch (Exception ex)
-            {
-                lastFirebaseInitState = "Exception creating dbRef: " + ex.Message;
-                Debug.LogError($"[FirebaseInit] ({caller}) {lastFirebaseInitState}");
-                return;
-            }
-        }
-
-        isFirebaseReady = (dbRef != null);
-        lastFirebaseInitState = isFirebaseReady ? "READY" : "dbRef still null";
-        Debug.Log($"[FirebaseInit] ({caller}) Completed. {lastFirebaseInitState}");
-    }
-
-
 
     #endregion
 
@@ -374,37 +369,14 @@ public class GameManager : MonoBehaviour
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        if (scene.name == arSceneName)
-        {
-            // We've just loaded the AR Scene. Find the TreasureManager and initialize it.
-            var treasureManager = FindObjectOfType<TreasureManagerGPS_Multiplayer>();
-            if (treasureManager != null)
-            {
-                treasureManager.InitializeForRoom(CurrentRoomId);
-            }
-            else
-            {
-                Debug.LogError("Loaded AR Scene but couldn't find TreasureManager!");
-            }
-        }
+        // IMPORTANT:
+        // Do NOT initialize TreasureManagerGPS_Multiplayer here.
+        // ARSceneController is responsible for initializing it based on CurrentMode.
     }
 
     #endregion
 
-    #region --- Helpers ---
-    private string GenerateRoomCode(int length = 4)
-    {
-        const string chars = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789";
-        var random = new System.Random();
-        var code = new char[length];
-        for (int i = 0; i < length; i++)
-        {
-            code[i] = chars[random.Next(chars.Length)];
-        }
-        return new String(code);
-    }
-    #endregion
-
+    #region --- Creator Mode API ---
 
     public void StartCreatorMode()
     {
@@ -425,7 +397,6 @@ public class GameManager : MonoBehaviour
     public void SaveNewTreasureSet(string setName)
     {
         Debug.Log("--- SaveNewTreasureSet START ---");
-
         EnsureFirebaseReady("SaveNewTreasureSet");
 
         if (!isFirebaseReady)
@@ -435,48 +406,18 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        // (also add the UserId empty check here)
-        if (string.IsNullOrEmpty(AuthManager.Instance.UserId))
+        if (string.IsNullOrEmpty(AuthManager.Instance?.UserId))
         {
             Debug.LogError("FATAL: UserId empty. Cannot save.");
             return;
         }
 
-
-        // --- BREADCRUMB 1: Check for null references ---
-        if (dbRef == null)
-        {
-            Debug.LogError("FATAL: dbRef is NULL. The Firebase Database reference was not initialized.");
-            return; // Stop execution
-        }
-        if (AuthManager.Instance == null)
-        {
-            Debug.LogError("FATAL: AuthManager.Instance is NULL. The AuthManager is missing.");
-            return; // Stop execution
-        }
-        if (AuthManager.Instance.User == null)
-        {
-            Debug.LogError("FATAL: AuthManager.Instance.User is NULL. The user is not signed in.");
-            return; // Stop execution
-        }
-        if (string.IsNullOrEmpty(AuthManager.Instance.UserId))
-        {
-            Debug.LogError("FATAL: AuthManager.Instance.UserId is empty. Cannot save treasure set because 'createdBy' would be blank.");
-            return;
-        }
-
-        Debug.Log($"Auth OK. Saving as UserId={AuthManager.Instance.UserId}");
-        Debug.Log("BREADCRUMB 1 PASSED: All manager references are valid.");
-
-        // --- BREADCRUMB 2: Check for valid data ---
         if (newSetTreasure.Count == 0)
         {
             Debug.LogError("No treasures to save.");
             return;
         }
-        Debug.Log($"BREADCRUMB 2 PASSED: Found {newSetTreasure.Count} treasures to save.");
 
-        // --- BREADCRUMB 3: Prepare the data object ---
         string newSetId = dbRef.Child("treasureSets").Push().Key;
         TreasureSetData newSet = new TreasureSetData
         {
@@ -485,21 +426,17 @@ public class GameManager : MonoBehaviour
             createdBy = AuthManager.Instance.UserId,
             treasures = this.newSetTreasure
         };
-        Debug.Log("BREADCRUMB 3 PASSED: TreasureSetData object created successfully.");
 
-        // --- BREADCRUMB 4: Convert to JSON and save ---
         string json = JsonUtility.ToJson(newSet);
-        Debug.Log("BREADCRUMB 4 PASSED: Data converted to JSON. Sending to Firebase...");
-
         dbRef.Child("treasureSets").Child(newSetId).SetRawJsonValueAsync(json).ContinueWithOnMainThread(task =>
         {
             if (task.IsFaulted)
             {
-                Debug.LogError("BREADCRUMB 5 FAILED: Failed to save treasure set: " + task.Exception);
+                Debug.LogError("Failed to save treasure set: " + task.Exception);
             }
             else
             {
-                Debug.Log("BREADCRUMB 5 SUCCESS: Treasure set saved successfully!");
+                Debug.Log("Treasure set saved successfully!");
                 ExitCreatorMode();
             }
         });
@@ -509,7 +446,7 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator RetrySaveTreasureSet(string setName)
     {
-        float timeout = 30f; // was 5
+        float timeout = 30f;
         while (!isFirebaseReady && timeout > 0f)
         {
             EnsureFirebaseReady("RetrySaveTreasureSet");
@@ -524,30 +461,38 @@ public class GameManager : MonoBehaviour
             Debug.LogError($"Firebase never became ready in time. state={lastFirebaseInitState}");
     }
 
-
     public void ReturnToMenu()
     {
         Debug.Log("Returning to Main Menu...");
 
-        // Stop any active Firebase listeners to prevent errors in the menu scene.
         StopListeningToRoomUpdates();
 
-        // Reset the game state.
         CurrentMode = GameMode.InMenu;
         CurrentRoomId = null;
         IsHost = false;
-        newSetTreasure.Clear(); // Clear any temporary creation data.
+        newSetTreasure.Clear();
 
-        // Load the menu scene. Make sure your scene is named "MenuScene".
         SceneManager.LoadScene("MenuScene");
     }
+
+    #endregion
+
+    #region --- Helpers ---
+
+    private string GenerateRoomCode(int length = 4)
+    {
+        const string chars = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789";
+        var random = new System.Random();
+        var code = new char[length];
+        for (int i = 0; i < length; i++)
+            code[i] = chars[random.Next(chars.Length)];
+        return new string(code);
+    }
+
+    #endregion
 }
 
-
 #region --- Data Structures ---
-
-// These classes define the structure of your data in Firebase.
-// They should be [Serializable] to work with JsonUtility.
 
 [Serializable]
 public class TreasureSetData
@@ -556,27 +501,6 @@ public class TreasureSetData
     public string setName;
     public string createdBy;
     public List<TreasureManagerGPS_Multiplayer.TreasureData> treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
-}
-
-[Serializable]
-public class RoomData
-{
-    public string hostId;
-    public string hostName;
-    public string selectedSetId;
-    public string status; // "waiting", "in-progress", "finished"
-    public Dictionary<string, PlayerData> players;
-    public Dictionary<string, TreasureManagerGPS_Multiplayer.TreasureData> gameState;
-
-    public RoomData(string hostId, string hostName, string setId)
-    {
-        this.hostId = hostId;
-        this.hostName = hostName;
-        this.selectedSetId = setId;
-        this.status = "waiting";
-        this.players = new Dictionary<string, PlayerData>();
-        this.gameState = new Dictionary<string, TreasureManagerGPS_Multiplayer.TreasureData>();
-    }
 }
 
 [Serializable]
@@ -593,5 +517,3 @@ public class PlayerData
 }
 
 #endregion
-
-

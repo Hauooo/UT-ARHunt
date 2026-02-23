@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using Firebase;
 using Firebase.Database;
 using Firebase.Extensions;
 using System;
@@ -20,7 +19,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         public double lat;
         public double lon;
         public long points;
-        public Dictionary<string, bool> collectedBy = new Dictionary<string, bool>(); // Track who collected it
+        public Dictionary<string, bool> collectedBy = new Dictionary<string, bool>();
     }
 
     // A local class to hold all information about a treasure, including its key and GameObject instance.
@@ -29,22 +28,6 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         public string key;
         public TreasureData data;
         public GameObject instance;
-
-    }
-
-    public void InitializeForRoom(string roomId)
-    {
-        currentRoomId = roomId;
-        LogToUI($"Joining hunt in room: {roomId}");
-
-        // Get references to our singleton managers
-        authManager = AuthManager.Instance;
-        locationManager = LocationManager.Instance;
-
-        if (arRaycastManager == null) arRaycastManager = FindObjectOfType<ARRaycastManager>();
-        collectButton.onClick.AddListener(CollectTargetTreasure);
-
-        StartCoroutine(WaitForServices());
     }
 
     public enum PlayerMode { Setter, Finder }
@@ -55,11 +38,15 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [Header("AR & Game Settings")]
     [SerializeField] private ARRaycastManager arRaycastManager;
     [SerializeField] private GameObject treasurePrefab;
-    [SerializeField] private float spawnRange = 25f; // Player must be within this many meters to start scanning.
-    [SerializeField] private float revealRadius = 3.0f; // AR plane must be within this many meters of the target spot.
+    [SerializeField] private float spawnRange = 100f;
+    [SerializeField] private float revealRadius = 50.0f;
     [SerializeField] private float collectDistance = 5f;
     [SerializeField] private float updateInterval = 2.0f;
 
+    [Header("Firebase")]
+    [SerializeField]
+    private string firebaseDatabaseUrl =
+        "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
     [Header("UI")]
     [SerializeField] private Button setTreasureButton;
@@ -70,65 +57,122 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [SerializeField] private TMP_Text distanceLabel;
     [SerializeField] private RectTransform arrowIndicator;
 
-    // --- Serive References (No longer manages these itself) ---
-
+    // --- Service References ---
     private DatabaseReference dbRef;
     private AuthManager authManager;
     private LocationManager locationManager;
 
     // --- State ---
     private bool servicesReady = false;
-    private Dictionary<string, Treasure> localTreasures = new Dictionary<string, Treasure>();
-    private string currentTargetKey; // The key of the treasure we are currently hunting.
-    private string currentRoomId; // For future multiplayer room management.
+    private bool initialized = false;
 
-    void Start()
+    private Dictionary<string, Treasure> localTreasures = new Dictionary<string, Treasure>();
+    private string currentTargetKey;
+    private string currentRoomId;
+
+    private Coroutine initCoroutine;
+
+    private void Start()
     {
+        // IMPORTANT: Do not auto-start initialization here.
+        // In multiplayer, ARSceneController should call InitializeForRoom(roomId).
+        Debug.Log("[TreasureManagerGPS_Multiplayer] Start() - waiting for InitializeForRoom...");
+    }
+
+    private void OnDestroy()
+    {
+        StopListeningForTreasures();
+        CancelInvoke(nameof(UpdateFinderState));
+    }
+
+    private void Update()
+    {
+        if (!servicesReady) return;
+
+        if (!string.IsNullOrEmpty(currentTargetKey))
+        {
+            if (CanScanForTreasure() &&
+                localTreasures.ContainsKey(currentTargetKey) &&
+                localTreasures[currentTargetKey].instance == null)
+            {
+                TrySpawnTreasure();
+            }
+        }
+
+        UpdateUIElements();
+    }
+
+    /// <summary>
+    /// Called by ARSceneController once the AR scene is loaded and the roomId is known.
+    /// </summary>
+    public void InitializeForRoom(string roomId)
+    {
+        if (initialized)
+        {
+            Debug.LogWarning("[TreasureManagerGPS_Multiplayer] InitializeForRoom called more than once. Ignoring.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(roomId))
+        {
+            Debug.LogError("[TreasureManagerGPS_Multiplayer] InitializeForRoom called with null/empty roomId.");
+            enabled = false;
+            return;
+        }
+
+        initialized = true;
+        currentRoomId = roomId;
+
         // Get references to our singleton managers
         authManager = AuthManager.Instance;
         locationManager = LocationManager.Instance;
 
         if (authManager == null || locationManager == null)
         {
-            LogToUI("ERROR: AuthManager or LocationManager not found in scene!");
+            LogToUI("ERROR: AuthManager or LocationManager not found!");
             enabled = false;
             return;
         }
 
         if (arRaycastManager == null) arRaycastManager = FindObjectOfType<ARRaycastManager>();
 
-        setTreasureButton.onClick.AddListener(SetTreasureHere);
-        collectButton.onClick.AddListener(CollectTargetTreasure);
-        if (modeToggleButton) modeToggleButton.onClick.AddListener(ToggleMode);
-
+        WireButtons();
         SetupUI();
-        LogToUI("Initializing...");
 
-        // Start the initialization process. This is now much cleaner.
-        StartCoroutine(WaitForServices());
+        LogToUI($"Joining hunt in room: {roomId}");
+
+        // Start init process (only once)
+        initCoroutine = StartCoroutine(WaitForServices());
     }
 
-    void OnDestroy()
+    private void WireButtons()
     {
-        StopListeningForTreasures();
-        CancelInvoke(nameof(UpdateFinderState));
-    }
-
-    void Update()
-    {
-        if (!servicesReady) return;
-
-        if (!string.IsNullOrEmpty(currentTargetKey))
+        if (setTreasureButton != null)
         {
-            if (CanScanForTreasure() && localTreasures.ContainsKey(currentTargetKey) && localTreasures[currentTargetKey].instance == null)
-            {
-                TrySpawnTreasure();
-            }
+            setTreasureButton.onClick.RemoveAllListeners();
+            setTreasureButton.onClick.AddListener(SetTreasureHere);
         }
-        UpdateUIElements();
+        else
+        {
+            Debug.LogWarning("[TreasureManagerGPS_Multiplayer] setTreasureButton not assigned.");
+        }
+
+        if (collectButton != null)
+        {
+            collectButton.onClick.RemoveAllListeners();
+            collectButton.onClick.AddListener(CollectTargetTreasure);
+        }
+        else
+        {
+            Debug.LogWarning("[TreasureManagerGPS_Multiplayer] collectButton not assigned.");
+        }
+
+        if (modeToggleButton != null)
+        {
+            modeToggleButton.onClick.RemoveAllListeners();
+            modeToggleButton.onClick.AddListener(ToggleMode);
+        }
     }
-
-
 
     // --- MULTIPLAYER TREASURE SYSTEM ---
 
@@ -141,25 +185,22 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         {
             lat = locationManager.Latitude,
             lon = locationManager.Longitude,
-            collectedBy = new Dictionary<string, bool>() // Initialize with an empty dictionary
+            collectedBy = new Dictionary<string, bool>()
         };
 
         dbRef.Child("treasures").Child(newId).SetRawJsonValueAsync(JsonUtility.ToJson(treasure))
-            .ContinueWithOnMainThread(t =>
+            .ContinueWith(task =>
             {
-                if (t.IsFaulted) LogToUI("Error adding treasure: " + t.Exception);
+                if (task.IsFaulted) LogToUI("Error adding treasure: " + task.Exception);
                 else LogToUI("Treasure placed successfully!");
             });
     }
 
-    // --- MERGED & REFACTORED: Using efficient child listeners ---
     private void StartListeningForTreasures()
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        // FIXED: The path MUST point to the 'gameState' inside the current room.
         DatabaseReference gameStateRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState");
-
         gameStateRef.ChildAdded += HandleTreasureAdded;
         gameStateRef.ChildChanged += HandleTreasureChanged;
     }
@@ -168,9 +209,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        // FIXED: Point to the correct path to unsubscribe.
         DatabaseReference gameStateRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState");
-
         gameStateRef.ChildAdded -= HandleTreasureAdded;
         gameStateRef.ChildChanged -= HandleTreasureChanged;
     }
@@ -188,6 +227,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             localTreasures[key] = new Treasure { key = key, data = data };
             LogToUI($"New treasure '{data.name}' appeared!");
         }
+        Debug.Log($"[TreasureAdded] room={currentRoomId} key={key}");
     }
 
     private void HandleTreasureChanged(object sender, ChildChangedEventArgs args)
@@ -203,38 +243,57 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         {
             LogToUI($"You have collected '{newData.name}'.");
             if (localTreasures[key].instance != null)
-            {
                 Destroy(localTreasures[key].instance);
-            }
+
             if (currentTargetKey == key)
-            {
                 currentTargetKey = null;
-            }
         }
     }
 
     private void CollectTargetTreasure()
     {
-        if (!servicesReady || string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey)) return;
+        if (!servicesReady || string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey))
+            return;
 
         string myUserId = authManager.UserId;
         Treasure target = localTreasures[currentTargetKey];
 
-        DatabaseReference treasureRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState").Child(target.key);
+        DatabaseReference treasureRef = dbRef
+            .Child("rooms").Child(currentRoomId)
+            .Child("gameState").Child(target.key);
 
-        // --- STEP 1: Transaction to claim the treasure ---
-        // RunTransaction returns a Task<DataSnapshot>
         treasureRef.RunTransaction(mutableData =>
         {
-            if (mutableData.Value == null) return TransactionResult.Abort();
+            // If treasure node is missing, abort (and log)
+            if (mutableData.Value == null)
+            {
+                Debug.LogWarning($"[Collect] ABORT: Treasure node missing at {treasureRef.Key}");
+                return TransactionResult.Abort();
+            }
 
-            var data = (Dictionary<string, object>)mutableData.Value;
-            var collectedByDict = data.ContainsKey("collectedBy") ? (Dictionary<string, object>)data["collectedBy"] : new Dictionary<string, object>();
+            // Ensure we have a dictionary-like object
+            if (mutableData.Value is not Dictionary<string, object> data)
+            {
+                Debug.LogWarning($"[Collect] ABORT: Treasure data not a Dictionary. Type={mutableData.Value.GetType()}");
+                return TransactionResult.Abort();
+            }
 
-            if (collectedByDict.ContainsKey(myUserId)) return TransactionResult.Abort();
+            // Get/create collectedBy as a dictionary
+            Dictionary<string, object> collectedBy;
 
-            collectedByDict[myUserId] = true;
-            data["collectedBy"] = collectedByDict;
+            if (data.TryGetValue("collectedBy", out object collectedByObj) && collectedByObj is Dictionary<string, object> existing)
+                collectedBy = existing;
+            else
+                collectedBy = new Dictionary<string, object>();
+
+            if (collectedBy.ContainsKey(myUserId))
+            {
+                Debug.LogWarning("[Collect] ABORT: already collected by this user.");
+                return TransactionResult.Abort();
+            }
+
+            collectedBy[myUserId] = true;
+            data["collectedBy"] = collectedBy;
 
             mutableData.Value = data;
             return TransactionResult.Success(mutableData);
@@ -247,58 +306,20 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 return;
             }
 
-            // --- FIXED: This is the correct way to check for a successful transaction ---
-            // 1. Get the final data state from the completed task's result.
+            // IMPORTANT: Transaction can complete without fault but not commit
+            // In Firebase Unity SDK, you should check task.Result exists AND read final state.
             DataSnapshot snapshot = task.Result;
+            var json = snapshot.GetRawJsonValue();
+            Debug.Log($"[Collect] Transaction result JSON: {json}");
 
-            // 2. Deserialize it into our data class.
-            TreasureData finalData = JsonUtility.FromJson<TreasureData>(snapshot.GetRawJsonValue());
-
-            // 3. The transaction is "committed" if our change is present in the final data.
-            if (finalData != null && finalData.collectedBy != null && finalData.collectedBy.ContainsKey(myUserId))
-            {
-                LogToUI("Treasure collected! Updating score...");
-
-                // --- STEP 2: Transaction to safely update the score ---
-                DatabaseReference playerScoreRef = dbRef.Child("rooms").Child(currentRoomId).Child("players").Child(myUserId).Child("score");
-
-                playerScoreRef.RunTransaction(scoreData =>
-                {
-                    long currentScore = 0;
-                    if (scoreData.Value != null)
-                    {
-                        currentScore = (long)scoreData.Value;
-                    }
-                    long pointsToAdd = target.data.points;
-                    scoreData.Value = currentScore + pointsToAdd;
-
-                    return TransactionResult.Success(scoreData);
-
-                }).ContinueWithOnMainThread(scoreTask =>
-                {
-                    if (scoreTask.IsFaulted)
-                    {
-                        LogToUI("Score update failed!");
-                    }
-                    else
-                    {
-                        LogToUI("Score updated successfully!");
-                    }
-                });
-            }
-            else
-            {
-                LogToUI("Could not collect treasure (likely already collected by you).");
-            }
+            LogToUI("Treasure collected!");
         });
     }
 
     // --- FINDER LOGIC ---
 
-    // MERGED & REFACTORED: This runs periodically, not every frame.
     private void UpdateFinderState()
     {
-        // This logic remains the same, but now it only operates on treasures in the current room.
         if (!servicesReady) return;
 
         double myLat = locationManager.Latitude;
@@ -309,9 +330,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         foreach (var treasure in localTreasures.Values)
         {
             if (treasure.data.collectedBy != null && treasure.data.collectedBy.ContainsKey(authManager.UserId))
-            {
                 continue;
-            }
 
             float distance = (float)LocationManager.Haversine(treasure.data.lat, treasure.data.lon, myLat, myLon);
             if (distance < minDistance)
@@ -320,6 +339,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 nearestKey = treasure.key;
             }
         }
+
         currentTargetKey = nearestKey;
     }
 
@@ -329,7 +349,6 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Treasure target = localTreasures[currentTargetKey];
         if (target.instance != null) return false;
 
-        // FIXED: Use the correct Haversine calculation for distance.
         double distance = LocationManager.Haversine(target.data.lat, target.data.lon, locationManager.Latitude, locationManager.Longitude);
         return distance <= spawnRange;
     }
@@ -340,18 +359,28 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Treasure target = localTreasures[currentTargetKey];
         if (target.instance != null) return;
 
+        if (arRaycastManager == null) return;
+
         var hits = new List<ARRaycastHit>();
         var screenCenter = new Vector2(Screen.width / 2f, Screen.height / 2f);
 
         if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon))
         {
             Pose hitPose = hits[0].pose;
-            // FIXED: Call the correct GPSToUnityPosition method.
             Vector3 treasureGpsPos = GPSToUnityPosition(target.data.lat, target.data.lon);
-            float distanceToTargetSpot = Vector3.Distance(new Vector3(hitPose.position.x, 0, hitPose.position.z), new Vector3(treasureGpsPos.x, 0, treasureGpsPos.z));
+            float distanceToTargetSpot = Vector3.Distance(
+                new Vector3(hitPose.position.x, 0, hitPose.position.z),
+                new Vector3(treasureGpsPos.x, 0, treasureGpsPos.z)
+            );
 
             if (distanceToTargetSpot <= revealRadius)
             {
+                if (treasurePrefab == null)
+                {
+                    Debug.LogError("[TreasureManagerGPS_Multiplayer] treasurePrefab not assigned.");
+                    return;
+                }
+
                 target.instance = Instantiate(treasurePrefab, hitPose.position, hitPose.rotation);
             }
         }
@@ -363,7 +392,6 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         mode = (mode == PlayerMode.Setter) ? PlayerMode.Finder : PlayerMode.Setter;
 
-        // Clean up state
         CancelInvoke(nameof(UpdateFinderState));
         StopListeningForTreasures();
 
@@ -371,6 +399,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         {
             if (treasure.instance != null) Destroy(treasure.instance);
         }
+
         localTreasures.Clear();
         currentTargetKey = null;
 
@@ -398,17 +427,29 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private void SetupUI()
     {
-        setTreasureButton.gameObject.SetActive(mode == PlayerMode.Setter);
-        modeLabel.text = $"Mode: {mode}";
+        // Guard all UI refs to avoid NullReferenceException
+        if (setTreasureButton != null)
+            setTreasureButton.gameObject.SetActive(mode == PlayerMode.Setter);
+
+        if (modeLabel != null)
+            modeLabel.text = $"Mode: {mode}";
+
         bool finderUIActive = mode == PlayerMode.Finder;
-        distanceLabel.gameObject.SetActive(finderUIActive);
-        arrowIndicator.gameObject.SetActive(finderUIActive);
-        collectButton.gameObject.SetActive(false); // Default to off
+
+        if (distanceLabel != null)
+            distanceLabel.gameObject.SetActive(finderUIActive);
+
+        if (arrowIndicator != null)
+            arrowIndicator.gameObject.SetActive(finderUIActive);
+
+        if (collectButton != null)
+            collectButton.gameObject.SetActive(false);
     }
 
     private void UpdateUIElements()
     {
         if (mode != PlayerMode.Finder) return;
+        if (distanceLabel == null || arrowIndicator == null || collectButton == null || statusText == null) return;
 
         if (string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey))
         {
@@ -416,28 +457,26 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             arrowIndicator.gameObject.SetActive(false);
             collectButton.gameObject.SetActive(false);
 
-            // Check if any huntable treasures exist at all
             int huntableCount = 0;
             foreach (var t in localTreasures.Values)
             {
                 if (t.data.collectedBy == null || !t.data.collectedBy.ContainsKey(authManager.UserId))
-                {
                     huntableCount++;
-                }
             }
-            statusText.text = huntableCount == 0 ? "No active treasures found." : "Finding closest treasure...";
 
+            statusText.text = huntableCount == 0 ? "No active treasures found." : "Finding closest treasure...";
             return;
         }
 
         Treasure target = localTreasures[currentTargetKey];
-        // FIXED: Call the correct GPSToUnityPosition method.
         Vector3 targetGpsPos = GPSToUnityPosition(target.data.lat, target.data.lon);
+
         float distanceToShow;
         Vector3 direction;
 
         if (target.instance != null)
         {
+            if (Camera.main == null) return;
             distanceToShow = Vector3.Distance(Camera.main.transform.position, target.instance.transform.position);
             direction = target.instance.transform.position - Camera.main.transform.position;
             collectButton.gameObject.SetActive(distanceToShow <= collectDistance);
@@ -451,23 +490,25 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         distanceLabel.text = $"{distanceToShow:F1} m";
         arrowIndicator.gameObject.SetActive(true);
+
         direction.y = 0;
+        if (Camera.main == null) return;
         float angle = Vector3.SignedAngle(Camera.main.transform.forward, direction, Vector3.up);
         arrowIndicator.localEulerAngles = new Vector3(0, 0, -angle);
     }
-
-
-
 
     private Vector3 GPSToUnityPosition(double targetLat, double targetLon)
     {
         double myLat = locationManager.Latitude;
         double myLon = locationManager.Longitude;
         const double R = 6371000.0;
+
         double dLat = (targetLat - myLat) * (Math.PI / 180.0);
         double dLon = (targetLon - myLon) * (Math.PI / 180.0);
+
         double x = dLon * R * Math.Cos(myLat * (Math.PI / 180.0));
         double z = dLat * R;
+
         return new Vector3((float)x, 0, (float)z);
     }
 
@@ -487,10 +528,20 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         }
 
         LogToUI("Services ready. Initializing Firebase...");
-        dbRef = FirebaseDatabase.DefaultInstance.RootReference;
+
+        try
+        {
+            dbRef = FirebaseDatabase.GetInstance(firebaseDatabaseUrl).RootReference;
+        }
+        catch (Exception ex)
+        {
+            LogToUI("ERROR: Failed to init Firebase DB: " + ex.Message);
+            enabled = false;
+            yield break;
+        }
+
         servicesReady = true;
 
-        // Now that everything is ready, start the game logic
         StartListeningForTreasures();
         InvokeRepeating(nameof(UpdateFinderState), 1.0f, updateInterval);
     }

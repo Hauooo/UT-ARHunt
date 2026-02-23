@@ -16,28 +16,44 @@ public class LobbyPanelController : MonoBehaviour
 
     private void OnEnable()
     {
-        // Subscribe to events
+        if (GameManager.Instance == null)
+        {
+            Debug.LogError("[LobbyPanelController] GameManager.Instance is null.");
+            return;
+        }
+
+        if (roomCodeText == null) Debug.LogError("[LobbyPanelController] roomCodeText not assigned.");
+        if (startGameButton == null) Debug.LogError("[LobbyPanelController] startGameButton not assigned.");
+        if (leaveButton == null) Debug.LogError("[LobbyPanelController] leaveButton not assigned.");
+        if (playerListContent == null) Debug.LogError("[LobbyPanelController] playerListContent not assigned.");
+        if (playerListItemPrefab == null) Debug.LogError("[LobbyPanelController] playerListItemPrefab not assigned.");
+
         GameManager.Instance.OnLobbyReady += HandleLobbyReady;
         GameManager.Instance.OnPlayerListUpdated += HandlePlayerListUpdated;
 
-        // Avoid stacking listeners
-        startGameButton.onClick.RemoveAllListeners();
-        leaveButton.onClick.RemoveAllListeners();
+        if (startGameButton != null)
+        {
+            startGameButton.onClick.RemoveAllListeners();
+            startGameButton.onClick.AddListener(() => GameManager.Instance.StartGame());
+        }
 
-        startGameButton.onClick.AddListener(() => GameManager.Instance.StartGame());
-        leaveButton.onClick.AddListener(() => GameManager.Instance.LeaveRoom());
+        if (leaveButton != null)
+        {
+            leaveButton.onClick.RemoveAllListeners();
+            leaveButton.onClick.AddListener(() => GameManager.Instance.LeaveRoom());
+        }
 
-        // IMPORTANT: Refresh immediately in case OnLobbyReady already fired
+        // If UI refs exist, set a visible baseline so it isn't "empty"
+        if (roomCodeText != null)
+            roomCodeText.text = "Room Code: ...";
+
+        if (startGameButton != null)
+            startGameButton.gameObject.SetActive(false);
+
+        // Pull current state in case OnLobbyReady already fired
         var gm = GameManager.Instance;
         if (gm != null && !string.IsNullOrEmpty(gm.CurrentRoomId))
-        {
             HandleLobbyReady(gm.CurrentRoomId, gm.IsHost);
-        }
-        else
-        {
-            roomCodeText.text = "Room Code: ...";
-            startGameButton.gameObject.SetActive(false);
-        }
     }
 
     private void OnDisable()

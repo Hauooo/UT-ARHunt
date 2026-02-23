@@ -66,14 +66,25 @@ public class ARSceneController : MonoBehaviour
     private void SetupForPlayerMode()
     {
         Debug.Log("AR Scene: Setting up for Player Mode.");
-        creatorUIPanel.SetActive(false);
-        playerUIPanel.SetActive(true);
 
-        // Enable the TreasureManager and initialize it for the room
-        if (treasureManager != null)
+        if (creatorUIPanel != null) creatorUIPanel.SetActive(false);
+        if (playerUIPanel != null) playerUIPanel.SetActive(true);
+
+        if (string.IsNullOrEmpty(gameManager.CurrentRoomId))
         {
-            treasureManager.enabled = true;
-            treasureManager.InitializeForRoom(gameManager.CurrentRoomId);
+            Debug.LogError("[ARSceneController] CurrentRoomId is null/empty in PlayingInRoom mode. Returning to menu.");
+            gameManager.ReturnToMenu();
+            return;
         }
+
+        if (treasureManager == null)
+        {
+            Debug.LogError("[ARSceneController] TreasureManagerGPS_Multiplayer not found in ARScene. Returning to menu.");
+            gameManager.ReturnToMenu();
+            return;
+        }
+
+        treasureManager.enabled = true;
+        treasureManager.InitializeForRoom(gameManager.CurrentRoomId);
     }
 }
