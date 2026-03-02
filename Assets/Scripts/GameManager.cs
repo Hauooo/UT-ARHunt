@@ -182,11 +182,7 @@ public class GameManager : MonoBehaviour
         tasks.Add(roomRef.Child("selectedSetId").SetValueAsync(treasureSet.setId));
         tasks.Add(roomRef.Child("status").SetValueAsync("waiting"));
 
-        // Add host player
-        var hostPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "The Host", 0);
-        tasks.Add(roomRef.Child("players").Child(AuthManager.Instance.UserId)
-            .SetRawJsonValueAsync(JsonUtility.ToJson(hostPlayer)));
-
+        
         // Write treasure game state
         var gameStateRef = roomRef.Child("gameState");
         foreach (var treasure in treasureSet.treasures)
@@ -230,17 +226,16 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        IsHost = false;
-        CurrentRoomId = roomId?.Trim().ToUpperInvariant();
-        CurrentMode = GameMode.PlayingInRoom;
-
-        if (string.IsNullOrEmpty(CurrentRoomId))
+        string normalizedRoomId = roomId?.Trim().ToUpperInvariant();
+        if (string.IsNullOrEmpty(normalizedRoomId))
         {
             OnJoinFailed?.Invoke("Room code is empty.");
             return;
         }
 
-        DatabaseReference roomRef = dbRef.Child("rooms").Child(CurrentRoomId);
+        string myUid = AuthManager.Instance.UserId;
+
+        DatabaseReference roomRef = dbRef.Child("rooms").Child(normalizedRoomId);
         roomRef.GetValueAsync().ContinueWithOnMainThread(task =>
         {
             if (task.IsFaulted)
@@ -252,19 +247,32 @@ public class GameManager : MonoBehaviour
 
             if (!task.Result.Exists)
             {
-                OnJoinFailed?.Invoke($"Room {CurrentRoomId} does not exist.");
+                OnJoinFailed?.Invoke($"Room {normalizedRoomId} does not exist.");
+                return;
+            }
+
+            // Block host from joining their own room
+            string hostId = task.Result.Child("hostId").Value?.ToString();
+            if (!string.IsNullOrEmpty(hostId) && hostId == myUid)
+            {
+                OnJoinFailed?.Invoke("You are the host of this room. Hosts cannot join as a participant.");
                 return;
             }
 
             string status = task.Result.Child("status").Value?.ToString();
             if (status != "waiting")
             {
-                OnJoinFailed?.Invoke($"Room {CurrentRoomId} is not available to join.");
+                OnJoinFailed?.Invoke($"Room {normalizedRoomId} is not available to join.");
                 return;
             }
 
+            // Only NOW set local state for joining
+            IsHost = false;
+            CurrentRoomId = normalizedRoomId;
+            CurrentMode = GameMode.PlayingInRoom;
+
             var newPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "A Player", 0);
-            roomRef.Child("players").Child(AuthManager.Instance.UserId)
+            roomRef.Child("players").Child(myUid)
                 .SetRawJsonValueAsync(JsonUtility.ToJson(newPlayer))
                 .ContinueWithOnMainThread(joinTask =>
                 {
@@ -281,6 +289,7 @@ public class GameManager : MonoBehaviour
                 });
         });
     }
+
 
     public void StartGame()
     {
@@ -346,7 +355,12 @@ public class GameManager : MonoBehaviour
 
     private void HandleStatusChanged(object sender, ValueChangedEventArgs args)
     {
-        if (!args.Snapshot.Exists) return;
+        if (!args.Snapshot.Exists)
+        {
+            Debug.LogWarning("[GameManager] Room status node missing (room deleted). Returning to menu.");
+            ReturnToMenu();
+            return;
+        }
 
         string status = args.Snapshot.Value?.ToString();
         if (status == "in-progress")
@@ -355,12 +369,59 @@ public class GameManager : MonoBehaviour
             CurrentMode = GameMode.PlayingInRoom;
 
             OnGameStarting?.Invoke();
-
-            // OK to stop listening once we transition scenes (or keep if needed)
             StopListeningToRoomUpdates();
-
             SceneManager.LoadScene(arSceneName);
         }
+    }
+
+    #endregion
+
+    #region --- End Game Logic ---
+    public void EndGame()
+    {
+        if (!IsHost)
+        {
+            Debug.LogWarning("[GameManager] EndGame blocked: only host can end the game.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(CurrentRoomId))
+        {
+            Debug.LogWarning("[GameManager] EndGame blocked: CurrentRoomId is empty.");
+            return;
+        }
+
+        EnsureFirebaseReady("EndGame");
+        if (!isFirebaseReady || dbRef == null)
+        {
+            Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
+            return;
+        }
+
+        string roomIdToDelete = CurrentRoomId;
+
+        // Stop listeners first so we don't get callbacks for a room that no longer exists.
+        StopListeningToRoomUpdates();
+
+        Debug.Log($"[GameManager] Host ending game. Deleting room {roomIdToDelete}...");
+
+        dbRef.Child("rooms").Child(roomIdToDelete).RemoveValueAsync().ContinueWithOnMainThread(t =>
+        {
+            if (t.IsFaulted)
+            {
+                Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
+                return;
+            }
+
+            Debug.Log($"[GameManager] Room {roomIdToDelete} deleted.");
+
+            // Reset local state and return to menu
+            CurrentRoomId = null;
+            IsHost = false;
+            CurrentMode = GameMode.InMenu;
+
+            SceneManager.LoadScene("MenuScene");
+        });
     }
 
     #endregion
