@@ -1,6 +1,8 @@
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections;
 using TMPro;
+using Firebase.Auth;
 using Firebase.Database;
 using Firebase.Extensions;
 using System.Collections.Generic;
@@ -21,6 +23,7 @@ public class HostLobbyController : MonoBehaviour
 
     private DatabaseReference dbRef;
     private AuthManager authManager;
+    private Coroutine fetchRoutine;
 
     private Dictionary<string, TreasureSetData> availableSets = new Dictionary<string, TreasureSetData>();
     private TreasureSetData selectedSet;
@@ -49,19 +52,32 @@ public class HostLobbyController : MonoBehaviour
 
     private void OnEnable()
     {
+        fetchRoutine = StartCoroutine(FetchWhenSignedIn());
+    }
+
+    private void OnDisable()
+    {
+        if (fetchRoutine != null) StopCoroutine(fetchRoutine);
+        fetchRoutine = null;
+    }
+
+    private IEnumerator FetchWhenSignedIn()
+    {
+        // wait up to 10 seconds for auth
+        float timeout = 10f;
+        while (timeout > 0f && FirebaseAuth.DefaultInstance.CurrentUser == null)
+        {
+            if (feedbackText != null) feedbackText.text = "Signing in... please wait.";
+            timeout -= Time.unscaledDeltaTime;
+            yield return null;
+        }
+
         FetchPlayerTreasureSets();
     }
 
     private void FetchPlayerTreasureSets()
     {
         if (feedbackText != null) feedbackText.text = "Loading your treasure sets...";
-
-        if (authManager == null)
-        {
-            Debug.LogError("[HostLobbyController] AuthManager is null.");
-            if (feedbackText != null) feedbackText.text = "Auth not ready.";
-            return;
-        }
 
         if (dbRef == null)
         {
@@ -70,16 +86,18 @@ public class HostLobbyController : MonoBehaviour
             return;
         }
 
-        // Clear previous list items
         foreach (Transform child in contentParent) Destroy(child.gameObject);
         availableSets.Clear();
         selectedSet = null;
         hostButton.interactable = false;
 
-        string myUserId = authManager.UserId;
+        string myUserId = FirebaseAuth.DefaultInstance.CurrentUser?.UserId;
+
+        Debug.Log($"[HostLobbyController] Firebase UID={myUserId}, AuthManager.UserId={(authManager != null ? authManager.UserId : "null")}");
+
         if (string.IsNullOrEmpty(myUserId))
         {
-            Debug.LogWarning("[HostLobbyController] UserId empty; waiting for sign-in.");
+            Debug.LogWarning("[HostLobbyController] Firebase user not signed in yet.");
             if (feedbackText != null) feedbackText.text = "Signing in... please wait.";
             return;
         }
@@ -93,7 +111,7 @@ public class HostLobbyController : MonoBehaviour
                 if (task.IsFaulted)
                 {
                     if (feedbackText != null) feedbackText.text = "Error loading sets.";
-                    Debug.LogError("Error fetching treasure sets: " + task.Exception);
+                    Debug.LogError("[HostLobbyController] Error fetching treasure sets: " + task.Exception);
                     return;
                 }
 
@@ -115,9 +133,10 @@ public class HostLobbyController : MonoBehaviour
         foreach (var childSnapshot in snapshot.Children)
         {
             string json = childSnapshot.GetRawJsonValue();
+            string setId = childSnapshot.Key;
             TreasureSetData setData = JsonUtility.FromJson<TreasureSetData>(json);
-
-            availableSets[setData.setId] = setData;
+            setData.setId = setId;
+            availableSets[setId] = setData;
 
             GameObject listItem = Instantiate(setListItemPrefab, contentParent);
             listItem.GetComponentInChildren<TMP_Text>().text = setData.setName;

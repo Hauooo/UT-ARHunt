@@ -4,9 +4,14 @@ public class MenuManager : MonoBehaviour
 {
     [Header("Panels")]
     public GameObject mainMenuPanel;
+
+    // NEW panels
+    public GameObject playerPanel;
+    public GameObject creatorPanel;
+
+    // Existing panels (keep if still used elsewhere)
     public GameObject joinRoomPanel;
     public GameObject createRoomPanel;
-
     public GameObject hostLobbyPanel;
     public GameObject roomLobbyPanel;
 
@@ -15,8 +20,16 @@ public class MenuManager : MonoBehaviour
     void Start()
     {
         ShowPanel(mainMenuPanel);
-        GameManager.Instance.OnLobbyReady += HandleLobbyReady;
-        GameManager.Instance.OnJoinFailed += HandleJoinFailed;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnLobbyReady += HandleLobbyReady;
+            GameManager.Instance.OnJoinFailed += HandleJoinFailed;
+        }
+        else
+        {
+            Debug.LogError("[MenuManager] GameManager.Instance is null in Start().");
+        }
     }
 
     void OnDestroy()
@@ -44,24 +57,28 @@ public class MenuManager : MonoBehaviour
         activePanel.SetActive(true);
     }
 
-    public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
-    public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
+    // MAIN MENU BUTTONS
+    public void OnPlayButton() => ShowPanel(playerPanel);
+    public void OnCreatorButton() => ShowPanel(creatorPanel);
+
+    // COMMON
     public void OnBackButton() => ShowPanel(mainMenuPanel);
 
-    // If you want a button to open the room lobby explicitly:
-    public void OnLobbyButton() => ShowPanel(roomLobbyPanel);
+    // OPTIONAL: if playerPanel still has these buttons
+    public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
+    public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
 
-    public void OnCreatorButton() => GameManager.Instance.StartCreatorMode();
+    public void OnCreateButton() => GameManager.Instance.StartCreatorMode();
 
     private void HandleLobbyReady(string roomId, bool isHost)
     {
         Debug.Log($"Lobby ready! Room ID: {roomId} isHost={isHost}");
-        ShowPanel(roomLobbyPanel);
+        ShowPanel(isHost ? hostLobbyPanel : roomLobbyPanel);
     }
 
     private void HandleJoinFailed(string reason)
     {
         Debug.LogWarning($"Join failed: {reason}");
-        ShowPanel(mainMenuPanel);
+        ShowPanel(playerPanel != null ? playerPanel : mainMenuPanel);
     }
 }
