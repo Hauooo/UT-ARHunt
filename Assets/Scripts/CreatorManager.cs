@@ -62,6 +62,10 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private Button confirmDeleteButton;
     [SerializeField] private Button deleteCancelButton;
 
+    // ── Challenge Panel ─────────────────────────────────────────────────────────────────
+    [Header("Challenge Config")]
+    [SerializeField] private ChallengeConfigController challengeConfig;
+
     // ── Private State ─────────────────────────────────────────────────────
     private GameManager gameManager;
     private LocationManager locationManager;
@@ -500,6 +504,20 @@ public class CreatorMapController : MonoBehaviour
         var img = pin.GetComponent<Image>();
         if (img != null) img.color = Color.yellow;
 
+        var btn = pin.GetComponent<Button>() ?? pin.AddComponent<Button>();
+        int capturedIndex = workingPins.Count - 1; // capture index for closure
+        btn.onClick.AddListener(() =>
+        {
+            challengeConfig.Show(
+                capturedIndex,
+                workingPins[capturedIndex].challenge,
+                OnChallengeSaved
+            );
+        });
+
+        // ── NEW: show a badge if a challenge is already attached ──
+        UpdatePinBadge(pin, treasure.challenge);
+
         previewPinObjects.Add(pin);
     }
 
@@ -537,6 +555,25 @@ public class CreatorMapController : MonoBehaviour
         Debug.Log("[CreatorMapController] " + msg);
     }
 
+    // ── Visual badge on pin ───────────────────────────────────────────────────────
+    private void UpdatePinBadge(GameObject pin, ChallengeData challenge)
+    {
+        var label = pin.GetComponentInChildren<TMP_Text>();
+        if (label == null) return;
+
+        string badge = challenge?.type switch
+        {
+            ChallengeType.MCQ => " ❓",
+            ChallengeType.MemoryMatch => " 🎮",
+            ChallengeType.OrderSequence => " 🎮",
+            _ => ""
+        };
+
+        // Append badge to existing treasure name label
+        var treasure = workingPins[previewPinObjects.IndexOf(pin)];
+        label.text = treasure.name + badge;
+    }
+
     private void UpdateNewPinCountText()
     {
         if (newPinCountText != null)
@@ -559,6 +596,20 @@ public class CreatorMapController : MonoBehaviour
             i++;
         }
         return null;
+    }
+
+    // ── Callback from ChallengeConfigController ──────────────────────────────────
+    private void OnChallengeSaved(int pinIndex, ChallengeData challengeData)
+    {
+        if (pinIndex < 0 || pinIndex >= workingPins.Count) return;
+
+        workingPins[pinIndex].challenge = challengeData;
+
+        // Update the pin badge to show the challenge type
+        if (pinIndex < previewPinObjects.Count)
+            UpdatePinBadge(previewPinObjects[pinIndex], challengeData);
+
+        Debug.Log($"[CreatorMapController] Challenge saved for pin {pinIndex}: {challengeData?.type}");
     }
 
     #endregion

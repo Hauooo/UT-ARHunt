@@ -35,7 +35,8 @@ public class OSMTileLoader : MonoBehaviour
         float mapHeight = mapContainer.rect.height;
 
         // Use the SMALLER dimension so tiles always cover both axes
-        float tileSize = Mathf.Max(mapWidth, mapHeight) / tileGridSize;
+        int safeGridSize = Mathf.Max(1, tileGridSize);
+        float tileSize = Mathf.Max(mapWidth, mapHeight) / safeGridSize;
 
         int centerX = LonToTileX(centerLon, zoom);
         int centerY = LatToTileY(centerLat, zoom);

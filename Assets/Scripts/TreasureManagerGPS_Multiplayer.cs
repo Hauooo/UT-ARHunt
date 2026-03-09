@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Firebase.Database;
@@ -22,6 +22,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         // Note: JsonUtility doesn't serialize Dictionary well, but Firebase will create this map once a player collects.
         public Dictionary<string, bool> collectedBy = new Dictionary<string, bool>();
+        public ChallengeData challenge; // Optional: add challenge data here for future extension
     }
 
     // Local runtime treasure state
@@ -58,6 +59,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [SerializeField] private TMP_Text modeLabel;
     [SerializeField] private TMP_Text distanceLabel;
     [SerializeField] private RectTransform arrowIndicator;
+    [SerializeField] private ChallengeRunner challengeRunner; // Optional: for future extension to run challenges attached to treasures
 
     // --- Service References ---
     private DatabaseReference dbRef;
@@ -284,11 +286,46 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             return;
         }
 
+        // Lock immediately so double-taps can't queue two challenges
         isCollectInProgress = true;
         if (collectButton != null) collectButton.interactable = false;
 
-        string myUserId = authManager.UserId;
         Treasure target = localTreasures[currentTargetKey];
+
+        // ── NEW: Check if this checkpoint has a challenge ─────────────────────
+        bool hasChallenge = target.data.challenge != null
+                         && target.data.challenge.type != ChallengeType.None;
+
+        if (hasChallenge && challengeRunner != null)
+        {
+            LogToUI("Complete the challenge to collect this treasure!");
+
+            challengeRunner.RunChallenge(target.data.challenge, (success, bonusPoints) =>
+            {
+                if (!success)
+                {
+                    // Challenge failed — release the lock and let player retry later
+                    isCollectInProgress = false;
+                    if (collectButton != null) collectButton.interactable = true;
+                    LogToUI("Challenge failed. Try again!");
+                    return;
+                }
+
+                // Challenge passed — run the Firebase transaction
+                LogToUI($"Challenge passed! +{bonusPoints} bonus pts. Collecting...");
+                RunCollectTransaction(target, bonusPoints);
+            });
+        }
+        else
+        {
+            // No challenge — go straight to the transaction
+            RunCollectTransaction(target, 0);
+        }
+    }
+
+    private void RunCollectTransaction(Treasure target, int bonusPoints)
+    {
+        string myUserId = authManager.UserId;
 
         DatabaseReference treasureRef = dbRef
             .Child("rooms").Child(currentRoomId)
@@ -310,12 +347,13 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
             Dictionary<string, object> collectedBy;
 
-            if (data.TryGetValue("collectedBy", out object collectedByObj) && collectedByObj is Dictionary<string, object> existing)
+            if (data.TryGetValue("collectedBy", out object collectedByObj)
+                && collectedByObj is Dictionary<string, object> existing)
                 collectedBy = existing;
             else
                 collectedBy = new Dictionary<string, object>();
 
-            // If ANYONE already collected it, abort (disappear for everyone)
+            // If ANYONE already collected it, abort
             if (collectedBy.Count > 0)
             {
                 abortedAlreadyCollected = true;
@@ -325,6 +363,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // First collector wins
             collectedBy[myUserId] = true;
             data["collectedBy"] = collectedBy;
+
+            // ── NEW: write bonus points into the record ───────────────────────
+            if (bonusPoints > 0)
+                data["bonusPoints"] = bonusPoints;
 
             mutableData.Value = data;
             return TransactionResult.Success(mutableData);
@@ -363,9 +405,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 return;
             }
 
-            // Success: the ChildChanged handler will remove/destroy it for everyone.
+            // Success — ChildChanged handler destroys it for everyone
+            int totalPoints = target.data.points + bonusPoints;
             Debug.Log($"[Collect] Transaction result JSON: {task.Result.GetRawJsonValue()}");
-            LogToUI("Treasure collected!");
+            LogToUI($"Treasure collected! +{totalPoints} pts");
         });
     }
 
