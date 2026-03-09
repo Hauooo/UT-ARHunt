@@ -406,7 +406,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             }
 
             // Success — ChildChanged handler destroys it for everyone
-            int totalPoints = target.data.points + bonusPoints;
+            long totalPoints = target.data.points + bonusPoints;
             Debug.Log($"[Collect] Transaction result JSON: {task.Result.GetRawJsonValue()}");
             LogToUI($"Treasure collected! +{totalPoints} pts");
         });

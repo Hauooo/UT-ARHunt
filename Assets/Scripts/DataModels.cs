@@ -39,14 +39,3 @@ public class ChallengeData
 //   public ChallengeData challenge;   ← ADD THIS
 //
 // Since TreasureData is in TreasureManagerGPS_Multiplayer.cs, add it there.
-
-
-// ── Extend existing TreasureSetData ──────────────────────────────────────────
-[Serializable]
-public class TreasureSetData
-{
-    public string setId;
-    public string setName;
-    public string createdBy;
-    public List<TreasureManagerGPS_Multiplayer.TreasureData> treasures;
-}
