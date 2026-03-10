@@ -15,14 +15,14 @@ using System;
 /// </summary>
 public class CreatorMapController : MonoBehaviour
 {
-    // ── Map ───────────────────────────────────────────────────────────────
+    // ── Map ───────────────���─────────────���─────────────────────────────────
     [Header("Map")]
     [SerializeField] private OSMTileLoader tileLoader;
     [SerializeField] private RectTransform mapContainer;
     [SerializeField] private GameObject tilePrefab;
-    [SerializeField] private GameObject pinPrefab;          // treasure pin
-    [SerializeField] private RectTransform playerMarker;    // blue dot
-    [SerializeField] private RectTransform pinsLayer;      // parent for all treasure pins (so they appear above tiles)
+    [SerializeField] private GameObject pinPrefab;
+    [SerializeField] private RectTransform playerMarker;
+    [SerializeField] private RectTransform pinsLayer;
 
     // ── Status ────────────────────────────────────────────────────────────
     [Header("Status")]
@@ -62,7 +62,7 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private Button confirmDeleteButton;
     [SerializeField] private Button deleteCancelButton;
 
-    // ── Challenge Panel ─────────────────────────────────────────────────────────────────
+    // ── Challenge Panel ───────────────────────────────────────────────────
     [Header("Challenge Config")]
     [SerializeField] private ChallengeConfigController challengeConfig;
 
@@ -74,16 +74,14 @@ public class CreatorMapController : MonoBehaviour
     private bool gpsReady = false;
     private Dictionary<string, TreasureSetData> loadedSets = new();
 
-    // Working list of pins being placed (for New / Edit)
     private List<TreasureManagerGPS_Multiplayer.TreasureData> workingPins = new();
-    private List<GameObject> previewPinObjects = new();   // map pin GameObjects for the current session
-    private Dictionary<string, List<GameObject>> setMapPins = new(); // all loaded set pins on map
+    private List<GameObject> previewPinObjects = new();
+    private Dictionary<string, List<GameObject>> setMapPins = new();
 
-    private string editingSetId = null; // which set is being edited
+    private string editingSetId = null;
 
     // ─────────────────────────────────────────────────────────────────────
     #region Unity Lifecycle
-    // ─────────────────────────────────────────────────────────────────────
 
     private void Start()
     {
@@ -92,7 +90,6 @@ public class CreatorMapController : MonoBehaviour
 
         if (gameManager == null) { Debug.LogError("[CreatorMapController] No GameManager!"); return; }
 
-        // Init Firebase
         try
         {
             dbRef = FirebaseDatabase
@@ -104,52 +101,40 @@ public class CreatorMapController : MonoBehaviour
             Debug.LogError("[CreatorMapController] Firebase init failed: " + ex.Message);
         }
 
-        // Wire top-right buttons
         newButton.onClick.AddListener(OnNewClicked);
         editButton.onClick.AddListener(OnEditClicked);
         deleteButton.onClick.AddListener(OnDeleteClicked);
         backButton.onClick.AddListener(() => gameManager.ReturnToMenu());
 
-        // Wire New panel
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
         newSaveButton.onClick.AddListener(SaveNewSet);
         newCancelButton.onClick.AddListener(CloseAllPanels);
 
-        // Wire Edit panel
         editPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
         editSaveButton.onClick.AddListener(SaveEditedSet);
         editCancelButton.onClick.AddListener(CloseAllPanels);
 
-        // Wire Delete panel
         confirmDeleteButton.onClick.AddListener(ConfirmDelete);
         deleteCancelButton.onClick.AddListener(CloseAllPanels);
 
         CloseAllPanels();
         SetStatus("Acquiring GPS...");
-
-        // Wait for GPS then initialise map
         StartCoroutine(WaitForGPSThenInit());
     }
 
     private void Update()
     {
-        // Keep the player marker centred on the map (GPS updates smoothly)
         if (gpsReady && playerMarker != null)
-        {
-            // Player is always at the map centre — the tile loader re-centres on them
             playerMarker.anchoredPosition = Vector2.zero;
-        }
     }
 
     #endregion
 
     // ─────────────────────────────────────────────────────────────────────
     #region GPS & Map Init
-    // ─────────────────────────────────────────────────────────────────────
 
     private IEnumerator WaitForGPSThenInit()
     {
-        // Poll until LocationManager is ready
         while (locationManager == null || locationManager.Status != LocationManager.LocationStatus.Ready)
         {
             SetStatus($"Acquiring GPS... ({locationManager?.Status})");
@@ -162,19 +147,13 @@ public class CreatorMapController : MonoBehaviour
         double lat = locationManager.Latitude;
         double lon = locationManager.Longitude;
 
-        // Centre the OSM map on the player's location
         tileLoader.CenterMapOn(lat, lon);
-
-        // Subscribe to location updates to keep map centred while user moves
         locationManager.OnLocationUpdated += OnLocationUpdated;
-
-        // Load and display all of this user's existing treasure sets on the map
         LoadAllSetsOntoMap();
     }
 
     private void OnLocationUpdated(double lat, double lon)
     {
-        // Re-centre map as user moves
         tileLoader.CenterMapOn(lat, lon);
         RefreshAllPinsOnMap();
     }
@@ -189,7 +168,6 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region READ — Load All Sets onto Map
-    // ─────────────────────────────────────────────────────────────────────
 
     private void LoadAllSetsOntoMap()
     {
@@ -203,11 +181,7 @@ public class CreatorMapController : MonoBehaviour
             .GetValueAsync()
             .ContinueWithOnMainThread(task =>
             {
-                if (task.IsFaulted)
-                {
-                    SetStatus("Error loading sets.");
-                    return;
-                }
+                if (task.IsFaulted) { SetStatus("Error loading sets."); return; }
 
                 ClearAllMapPins();
                 loadedSets.Clear();
@@ -248,7 +222,6 @@ public class CreatorMapController : MonoBehaviour
     {
         ClearAllMapPins();
         foreach (var set in loadedSets.Values) SpawnPinsForSet(set);
-        // Re-draw in-progress preview pins too
         RedrawPreviewPins();
     }
 
@@ -263,7 +236,6 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region CREATE — New Set
-    // ─────────────────────────────────────────────────────────────────────
 
     private void OnNewClicked()
     {
@@ -281,7 +253,6 @@ public class CreatorMapController : MonoBehaviour
         string setName = newSetNameInput.text.Trim();
         if (string.IsNullOrEmpty(setName)) { SetStatus("Please enter a set name."); return; }
         if (workingPins.Count == 0) { SetStatus("Place at least one pin."); return; }
-
         if (dbRef == null || AuthManager.Instance == null) return;
 
         newSaveButton.interactable = false;
@@ -321,43 +292,53 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region UPDATE — Edit Set
-    // ─────────────────────────────────────────────────────────────────────
 
     private void OnEditClicked()
     {
         if (loadedSets.Count == 0) { SetStatus("No sets to edit. Create one first."); return; }
 
-        // Populate dropdown with set names
         editSetDropdown.ClearOptions();
         var options = new List<string>();
         foreach (var set in loadedSets.Values) options.Add(set.setName);
         editSetDropdown.AddOptions(options);
 
-        // Pre-load first set's data
-        LoadSetIntoEditPanel(GetSetByDropdownIndex(0));
-
+        // ── FIX: do NOT clear workingPins/preview here — LoadSetIntoEditPanel handles it ──
         editSetDropdown.onValueChanged.RemoveAllListeners();
         editSetDropdown.onValueChanged.AddListener(idx => LoadSetIntoEditPanel(GetSetByDropdownIndex(idx)));
-
-        workingPins.Clear();
-        ClearPreviewPins();
 
         editSetPanel.SetActive(true);
         newSetPanel.SetActive(false);
         deleteSetPanel.SetActive(false);
+
+        // Load first set — must happen AFTER panel is active so layout is correct
+        LoadSetIntoEditPanel(GetSetByDropdownIndex(0));
     }
 
     private void LoadSetIntoEditPanel(TreasureSetData set)
     {
         if (set == null) return;
+
         editingSetId = set.setId;
         editSetNameInput.text = set.setName;
 
-        // Copy existing treasures into workingPins so user can add more
+        // Replace workingPins with the set's existing treasures
         workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(set.treasures);
         ClearPreviewPins();
-        RedrawPreviewPins();
-        UpdateEditPinCountText();
+        RedrawPreviewPins();      // spawns yellow, tappable preview pins for all existing treasures
+        UpdateEditPinCountText(); // ← shows correct count immediately
+
+        // Remove the static map pins for this set so only yellow preview pins are visible
+        if (setMapPins.ContainsKey(set.setId))
+        {
+            foreach (var p in setMapPins[set.setId]) Destroy(p);
+            setMapPins.Remove(set.setId);
+        }
+
+        SetStatus($"Editing '{set.setName}'. Tap a pin to set its challenge, or place new pins.");
+
+        // ── Auto-open challenge config for the first pin when editing ──
+        if (workingPins.Count > 0 && challengeConfig != null)
+            challengeConfig.Show(0, workingPins[0].challenge, OnChallengeSaved);
     }
 
     private void SaveEditedSet()
@@ -386,10 +367,8 @@ public class CreatorMapController : MonoBehaviour
                 editSaveButton.interactable = true;
                 if (task.IsFaulted) { SetStatus("Update failed."); return; }
 
-                // Refresh local cache and map
                 loadedSets[editingSetId] = updatedSet;
 
-                // Remove old pins for this set and respawn
                 if (setMapPins.ContainsKey(editingSetId))
                 {
                     foreach (var p in setMapPins[editingSetId]) Destroy(p);
@@ -408,7 +387,6 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region DELETE — Remove Set
-    // ─────────────────────────────────────────────────────────────────────
 
     private void OnDeleteClicked()
     {
@@ -451,7 +429,6 @@ public class CreatorMapController : MonoBehaviour
                 confirmDeleteButton.interactable = true;
                 if (task.IsFaulted) { SetStatus("Delete failed."); return; }
 
-                // Remove from map and local cache
                 if (setMapPins.ContainsKey(setToDelete.setId))
                 {
                     foreach (var p in setMapPins[setToDelete.setId]) Destroy(p);
@@ -468,7 +445,6 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region Shared Pin Placement (New & Edit)
-    // ─────────────────────────────────────────────────────────────────────
 
     private void PlacePinAtCurrentLocation()
     {
@@ -485,9 +461,14 @@ public class CreatorMapController : MonoBehaviour
         workingPins.Add(newPin);
         SpawnPreviewPin(newPin);
 
-        // Update the correct panel's counter
+        // Update the correct panel's counter immediately
         UpdateNewPinCountText();
         UpdateEditPinCountText();
+
+        // ── Auto-open challenge config for the newly placed pin ──
+        int newPinIndex = workingPins.Count - 1;
+        if (challengeConfig != null)
+            challengeConfig.Show(newPinIndex, workingPins[newPinIndex].challenge, OnChallengeSaved);
     }
 
     private void SpawnPreviewPin(TreasureManagerGPS_Multiplayer.TreasureData treasure)
@@ -500,12 +481,11 @@ public class CreatorMapController : MonoBehaviour
         var label = pin.GetComponentInChildren<TMP_Text>();
         if (label != null) label.text = treasure.name;
 
-        // Tint preview pins differently (e.g. yellow) so user can distinguish them
         var img = pin.GetComponent<Image>();
         if (img != null) img.color = Color.yellow;
 
         var btn = pin.GetComponent<Button>() ?? pin.AddComponent<Button>();
-        int capturedIndex = workingPins.Count - 1; // capture index for closure
+        int capturedIndex = workingPins.Count - 1;
         btn.onClick.AddListener(() =>
         {
             challengeConfig.Show(
@@ -515,10 +495,8 @@ public class CreatorMapController : MonoBehaviour
             );
         });
 
-        // ── NEW: show a badge if a challenge is already attached ──
-        UpdatePinBadge(pin, treasure.challenge);
-
         previewPinObjects.Add(pin);
+        UpdatePinBadge(pin, treasure.challenge);
     }
 
     private void RedrawPreviewPins()
@@ -537,7 +515,6 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region Helpers
-    // ───────────────────────────────────────────────────────────────��─────
 
     private void CloseAllPanels()
     {
@@ -547,6 +524,8 @@ public class CreatorMapController : MonoBehaviour
         workingPins.Clear();
         ClearPreviewPins();
         editingSetId = null;
+        if (editingSetId != null && loadedSets.ContainsKey(editingSetId))
+            SpawnPinsForSet(loadedSets[editingSetId]);
     }
 
     private void SetStatus(string msg)
@@ -555,7 +534,6 @@ public class CreatorMapController : MonoBehaviour
         Debug.Log("[CreatorMapController] " + msg);
     }
 
-    // ── Visual badge on pin ───────────────────────────────────────────────────────
     private void UpdatePinBadge(GameObject pin, ChallengeData challenge)
     {
         var label = pin.GetComponentInChildren<TMP_Text>();
@@ -569,24 +547,32 @@ public class CreatorMapController : MonoBehaviour
             _ => ""
         };
 
-        // Append badge to existing treasure name label
         var treasure = workingPins[previewPinObjects.IndexOf(pin)];
         label.text = treasure.name + badge;
     }
 
     private void UpdateNewPinCountText()
     {
-        if (newPinCountText != null)
-            newPinCountText.text = $"Pins placed: {workingPins.Count}";
+        if (newPinCountText == null)
+        {
+            Debug.LogWarning("[CreatorMapController] newPinCountText is not assigned in the Inspector!");
+            return;
+        }
+        newPinCountText.text = $"Pins placed: {workingPins.Count}";
     }
 
     private void UpdateEditPinCountText()
     {
-        if (editPinCountText != null)
-            editPinCountText.text = $"Pins placed: {workingPins.Count}";
+        if (editPinCountText == null)
+        {
+            Debug.LogWarning("[CreatorMapController] editPinCountText is not assigned in the Inspector!");
+            return;
+        }
+        editPinCountText.text = $"Pins placed: {workingPins.Count}";
     }
 
-    /// <summary>Returns the TreasureSetData matching a dropdown index (by insertion order).</summary>
+    
+
     private TreasureSetData GetSetByDropdownIndex(int index)
     {
         int i = 0;
@@ -598,16 +584,19 @@ public class CreatorMapController : MonoBehaviour
         return null;
     }
 
-    // ── Callback from ChallengeConfigController ──────────────────────────────────
+    // ── Callback from ChallengeConfigController ───────────────────────────
     private void OnChallengeSaved(int pinIndex, ChallengeData challengeData)
     {
         if (pinIndex < 0 || pinIndex >= workingPins.Count) return;
 
         workingPins[pinIndex].challenge = challengeData;
 
-        // Update the pin badge to show the challenge type
         if (pinIndex < previewPinObjects.Count)
             UpdatePinBadge(previewPinObjects[pinIndex], challengeData);
+
+        // Refresh pin count text now that the challenge panel has closed
+        UpdateNewPinCountText();
+        UpdateEditPinCountText();
 
         Debug.Log($"[CreatorMapController] Challenge saved for pin {pinIndex}: {challengeData?.type}");
     }

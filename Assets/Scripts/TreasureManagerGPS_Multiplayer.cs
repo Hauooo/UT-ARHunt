@@ -178,10 +178,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     private void SetTreasureHere()
     {
         if (!servicesReady) { LogToUI("Services not ready."); return; }
+        if (string.IsNullOrEmpty(currentRoomId)) { LogToUI("No active room."); return; }
 
-        // NOTE: This currently writes to a global "treasures" node, not room gameState.
-        // If you don't use this in multiplayer, you can remove it.
-        string newId = dbRef.Child("treasures").Push().Key;
+        DatabaseReference gameStateRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState");
+        string newId = gameStateRef.Push().Key;
 
         TreasureData treasure = new TreasureData
         {
@@ -192,7 +192,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             collectedBy = null
         };
 
-        dbRef.Child("treasures").Child(newId).SetRawJsonValueAsync(JsonUtility.ToJson(treasure))
+        gameStateRef.Child(newId).SetRawJsonValueAsync(JsonUtility.ToJson(treasure))
             .ContinueWithOnMainThread(t =>
             {
                 if (t.IsFaulted) LogToUI("Error adding treasure: " + t.Exception);
