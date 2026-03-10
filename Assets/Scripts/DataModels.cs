@@ -7,7 +7,8 @@ public enum ChallengeType
     None,           // no challenge — collect instantly
     MCQ,            // multiple choice question
     MemoryMatch,    // built-in minigame: flip tiles to find pairs
-    OrderSequence   // built-in minigame: arrange items in correct order
+    OrderSequence,  // built-in minigame: arrange items in correct order
+    BalloonPop      // AR minigame: pop all balloons before time runs out
 }
 
 [Serializable]

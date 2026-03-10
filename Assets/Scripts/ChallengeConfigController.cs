@@ -43,7 +43,9 @@ public class ChallengeConfigController : MonoBehaviour
     {
         "MemoryMatch_Easy",
         "MemoryMatch_Hard",
-        "OrderSequence"
+        "OrderSequence",
+        "BalloonPop_Easy",
+        "BalloonPop_Hard"
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -186,10 +188,19 @@ public class ChallengeConfigController : MonoBehaviour
     {
         int.TryParse(timeLimitInput.text, out int timeLimit);
 
+        var id = minigameOptions[minigameDropdown.value];
+        ChallengeType resolvedType = id switch
+        {
+            "MemoryMatch_Easy" or "MemoryMatch_Hard" => ChallengeType.MemoryMatch,
+            "OrderSequence"                          => ChallengeType.OrderSequence,
+            "BalloonPop_Easy"  or "BalloonPop_Hard"  => ChallengeType.BalloonPop,
+            _                                        => ChallengeType.MemoryMatch
+        };
+
         return new ChallengeData
         {
-            type = ChallengeType.MemoryMatch, // resolved by minigameId
-            minigameId = minigameOptions[minigameDropdown.value],
+            type             = resolvedType,
+            minigameId       = id,
             timeLimitSeconds = timeLimit > 0 ? timeLimit : 60
         };
     }
@@ -218,6 +229,7 @@ public class ChallengeConfigController : MonoBehaviour
 
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
+            case ChallengeType.BalloonPop:
                 challengeTypeDropdown.value = 2;
                 int idx = minigameOptions.IndexOf(data.minigameId);
                 minigameDropdown.value = idx >= 0 ? idx : 0;

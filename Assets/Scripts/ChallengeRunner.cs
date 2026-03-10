@@ -27,6 +27,9 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private TMP_Text timerText;
     [SerializeField] private Button launchMinigameButton;
 
+    [Header("AR Minigames")]
+    [SerializeField] private ARBalloonPopManager balloonPopManager;
+
     [Header("Shared")]
     [SerializeField] private Button skipButton;   // optional — creator can disable
 
@@ -69,6 +72,7 @@ public class ChallengeRunner : MonoBehaviour
                 break;
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
+            case ChallengeType.BalloonPop:
                 ShowMinigameLauncher(challenge);
                 break;
         }
@@ -149,8 +153,10 @@ public class ChallengeRunner : MonoBehaviour
         {
             "MemoryMatch_Easy" => "🃏 Memory Match (Easy)",
             "MemoryMatch_Hard" => "🃏 Memory Match (Hard)",
-            "OrderSequence" => "🔢 Order Sequence",
-            _ => challenge.minigameId
+            "OrderSequence"    => "🔢 Order Sequence",
+            "BalloonPop_Easy"  => "🎈 Pop the Balloons! (Easy)",
+            "BalloonPop_Hard"  => "🎈 Pop the Balloons! (Hard)",
+            _                  => challenge.minigameId
         };
 
         minigameNameText.text = $"Challenge: {displayName}\nTime limit: {challenge.timeLimitSeconds}s";
@@ -175,9 +181,17 @@ public class ChallengeRunner : MonoBehaviour
             case "OrderSequence":
                 // TODO: OrderSequenceManager.Instance.StartGame(challenge, OnMinigameResult);
                 break;
+            case "BalloonPop_Easy":
+            case "BalloonPop_Hard":
+                if (balloonPopManager != null)
+                {
+                    balloonPopManager.StartGame(challenge, OnMinigameResult);
+                    yield break;   // don't fall through to the fake timer
+                }
+                break;
         }
 
-        // Placeholder: simulate minigame result after 3 seconds
+        // Placeholder: simulate minigame result after 3 seconds (MemoryMatch / OrderSequence TODO)
         yield return new WaitForSeconds(3f);
         OnMinigameResult(true); // replace with real callback
     }
