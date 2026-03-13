@@ -406,9 +406,16 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             }
 
             // Success — ChildChanged handler destroys it for everyone
-            long totalPoints = target.data.points + bonusPoints;
-            Debug.Log($"[Collect] Transaction result JSON: {task.Result.GetRawJsonValue()}");
-            LogToUI($"Treasure collected! +{totalPoints} pts");
+            // After transaction success, update player score
+            long earned = target.data.points + bonusPoints;
+            dbRef.Child("rooms").Child(currentRoomId)
+                 .Child("scores").Child(myUserId)
+                 .RunTransaction(scoreData =>
+                 {
+                     long current = scoreData.Value == null ? 0 : (long)scoreData.Value;
+                     scoreData.Value = current + earned;
+                     return TransactionResult.Success(scoreData);
+                 });
         });
     }
 

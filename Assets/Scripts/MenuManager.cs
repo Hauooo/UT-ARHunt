@@ -73,7 +73,7 @@ public class MenuManager : MonoBehaviour
     private void HandleLobbyReady(string roomId, bool isHost)
     {
         Debug.Log($"Lobby ready! Room ID: {roomId} isHost={isHost}");
-        ShowPanel(isHost ? hostLobbyPanel : roomLobbyPanel);
+        ShowPanel(roomLobbyPanel);
     }
 
     private void HandleJoinFailed(string reason)

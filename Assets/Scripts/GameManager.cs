@@ -195,6 +195,7 @@ public class GameManager : MonoBehaviour
                 lat = treasure.lat,
                 lon = treasure.lon,
                 points = treasure.points,
+                challenge = treasure.challenge,
                 collectedBy = null // let it be missing initially; treat null as "not collected"
             };
 
@@ -372,6 +373,20 @@ public class GameManager : MonoBehaviour
             StopListeningToRoomUpdates();
             SceneManager.LoadScene(arSceneName);
         }
+
+        string status = args.Snapshot.Value?.ToString();
+
+        if (status == "ended")
+        {
+            Debug.Log("[GameManager] Room ended. Returning to menu.");
+            ReturnToMenu();
+            return;
+        }
+
+        if (status == "in-progress")
+        {
+            ...
+}
     }
 
     #endregion
@@ -398,29 +413,40 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        string roomIdToDelete = CurrentRoomId;
+        string roomId = CurrentRoomId;
+        var roomRef = dbRef.Child("rooms").Child(roomId);
 
-        // Stop listeners first so we don't get callbacks for a room that no longer exists.
-        StopListeningToRoomUpdates();
+        Debug.Log($"[GameManager] Host ending game. Marking room {roomId} as ended...");
 
-        Debug.Log($"[GameManager] Host ending game. Deleting room {roomIdToDelete}...");
-
-        dbRef.Child("rooms").Child(roomIdToDelete).RemoveValueAsync().ContinueWithOnMainThread(t =>
+        // 1) Signal everyone first
+        roomRef.Child("status").SetValueAsync("ended").ContinueWithOnMainThread(setTask =>
         {
-            if (t.IsFaulted)
+            if (setTask.IsFaulted)
             {
-                Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
+                Debug.LogError("[GameManager] Failed to set room ended status: " + setTask.Exception);
                 return;
             }
 
-            Debug.Log($"[GameManager] Room {roomIdToDelete} deleted.");
+            // 2) Host can return to menu immediately (others will return via HandleStatusChanged)
+            ReturnToMenu();
 
-            // Reset local state and return to menu
-            CurrentRoomId = null;
-            IsHost = false;
-            CurrentMode = GameMode.InMenu;
+            // 3) Cleanup after a short delay (so clients have time to receive the event)
+            StartCoroutine(DeleteRoomAfterDelay(roomId, 1.0f));
+        });
+    }
 
-            SceneManager.LoadScene("MenuScene");
+    private IEnumerator DeleteRoomAfterDelay(string roomId, float delaySeconds)
+    {
+        yield return new WaitForSeconds(delaySeconds);
+
+        EnsureFirebaseReady("DeleteRoomAfterDelay");
+        if (!isFirebaseReady || dbRef == null) yield break;
+
+        Debug.Log($"[GameManager] Deleting room {roomId}...");
+        dbRef.Child("rooms").Child(roomId).RemoveValueAsync().ContinueWithOnMainThread(t =>
+        {
+            if (t.IsFaulted) Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
+            else Debug.Log($"[GameManager] Room {roomId} deleted.");
         });
     }
 
