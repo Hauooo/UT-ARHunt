@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.SceneManagement;
 using Firebase;
 using Firebase.Database;
@@ -364,18 +364,8 @@ public class GameManager : MonoBehaviour
         }
 
         string status = args.Snapshot.Value?.ToString();
-        if (status == "in-progress")
-        {
-            Debug.Log("Game is starting! Loading AR Scene.");
-            CurrentMode = GameMode.PlayingInRoom;
 
-            OnGameStarting?.Invoke();
-            StopListeningToRoomUpdates();
-            SceneManager.LoadScene(arSceneName);
-        }
-
-        string status = args.Snapshot.Value?.ToString();
-
+        // ✅ NEW: end-game signal for everyone
         if (status == "ended")
         {
             Debug.Log("[GameManager] Room ended. Returning to menu.");
@@ -385,76 +375,81 @@ public class GameManager : MonoBehaviour
 
         if (status == "in-progress")
         {
-            ...
-}
+            Debug.Log("Game is starting! Loading AR Scene.");
+            CurrentMode = GameMode.PlayingInRoom;
+
+            OnGameStarting?.Invoke();
+            StopListeningToRoomUpdates();
+            SceneManager.LoadScene(arSceneName);
+        }
     }
 
     #endregion
 
     #region --- End Game Logic ---
     public void EndGame()
+{
+    if (!IsHost)
     {
-        if (!IsHost)
-        {
-            Debug.LogWarning("[GameManager] EndGame blocked: only host can end the game.");
-            return;
-        }
-
-        if (string.IsNullOrEmpty(CurrentRoomId))
-        {
-            Debug.LogWarning("[GameManager] EndGame blocked: CurrentRoomId is empty.");
-            return;
-        }
-
-        EnsureFirebaseReady("EndGame");
-        if (!isFirebaseReady || dbRef == null)
-        {
-            Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
-            return;
-        }
-
-        string roomId = CurrentRoomId;
-        var roomRef = dbRef.Child("rooms").Child(roomId);
-
-        Debug.Log($"[GameManager] Host ending game. Marking room {roomId} as ended...");
-
-        // 1) Signal everyone first
-        roomRef.Child("status").SetValueAsync("ended").ContinueWithOnMainThread(setTask =>
-        {
-            if (setTask.IsFaulted)
-            {
-                Debug.LogError("[GameManager] Failed to set room ended status: " + setTask.Exception);
-                return;
-            }
-
-            // 2) Host can return to menu immediately (others will return via HandleStatusChanged)
-            ReturnToMenu();
-
-            // 3) Cleanup after a short delay (so clients have time to receive the event)
-            StartCoroutine(DeleteRoomAfterDelay(roomId, 1.0f));
-        });
+        Debug.LogWarning("[GameManager] EndGame blocked: only host can end the game.");
+        return;
     }
 
-    private IEnumerator DeleteRoomAfterDelay(string roomId, float delaySeconds)
+    if (string.IsNullOrEmpty(CurrentRoomId))
     {
-        yield return new WaitForSeconds(delaySeconds);
-
-        EnsureFirebaseReady("DeleteRoomAfterDelay");
-        if (!isFirebaseReady || dbRef == null) yield break;
-
-        Debug.Log($"[GameManager] Deleting room {roomId}...");
-        dbRef.Child("rooms").Child(roomId).RemoveValueAsync().ContinueWithOnMainThread(t =>
-        {
-            if (t.IsFaulted) Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
-            else Debug.Log($"[GameManager] Room {roomId} deleted.");
-        });
+        Debug.LogWarning("[GameManager] EndGame blocked: CurrentRoomId is empty.");
+        return;
     }
 
-    #endregion
+    EnsureFirebaseReady("EndGame");
+    if (!isFirebaseReady || dbRef == null)
+    {
+        Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
+        return;
+    }
 
-    #region --- Scene Management ---
+    string roomId = CurrentRoomId;
+    var roomRef = dbRef.Child("rooms").Child(roomId);
 
-    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    Debug.Log($"[GameManager] Host ending game. Setting status=ended for room {roomId}...");
+
+    // 1) Signal all clients first
+    roomRef.Child("status").SetValueAsync("ended").ContinueWithOnMainThread(setTask =>
+    {
+        if (setTask.IsFaulted)
+        {
+            Debug.LogError("[GameManager] Failed to set ended status: " + setTask.Exception);
+            return;
+        }
+
+        // 2) Host can return immediately (others will return via HandleStatusChanged)
+        ReturnToMenu();
+
+        // 3) Cleanup room after a short delay so everyone receives the status update
+        StartCoroutine(DeleteRoomAfterDelay(roomId, 1.0f));
+    });
+}
+
+private IEnumerator DeleteRoomAfterDelay(string roomId, float delaySeconds)
+{
+    yield return new WaitForSeconds(delaySeconds);
+
+    EnsureFirebaseReady("DeleteRoomAfterDelay");
+    if (!isFirebaseReady || dbRef == null) yield break;
+
+    Debug.Log($"[GameManager] Deleting room {roomId}...");
+    dbRef.Child("rooms").Child(roomId).RemoveValueAsync().ContinueWithOnMainThread(t =>
+    {
+        if (t.IsFaulted) Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
+        else Debug.Log($"[GameManager] Room {roomId} deleted.");
+    });
+}
+
+#endregion
+
+#region --- Scene Management ---
+
+private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         // IMPORTANT:
         // Do NOT initialize TreasureManagerGPS_Multiplayer here.
