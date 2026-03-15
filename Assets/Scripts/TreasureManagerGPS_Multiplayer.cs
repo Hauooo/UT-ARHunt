@@ -41,9 +41,9 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [Header("AR & Game Settings")]
     [SerializeField] private ARRaycastManager arRaycastManager;
     [SerializeField] private GameObject treasurePrefab;
-    [SerializeField] private float spawnRange = 25f;     // meters: must be within this many meters (GPS) to start scanning/spawning
-    [SerializeField] private float revealRadius = 3.0f;  // Unity meters: AR hit point must be close enough to GPS target spot
-    [SerializeField] private float collectDistance = 5f; // Unity meters: show collect button when close enough to spawned instance
+    [SerializeField] private float spawnRange = 500f;     // meters: must be within this many meters (GPS) to start scanning/spawning
+    [SerializeField] private float revealRadius = 50.0f;  // Unity meters: AR hit point must be close enough to GPS target spot
+    [SerializeField] private float collectDistance = 10f; // Unity meters: show collect button when close enough to spawned instance
     [SerializeField] private float updateInterval = 2.0f;
 
     [Header("Firebase")]
@@ -275,6 +275,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private void CollectTargetTreasure()
     {
+        Debug.Log("[Collect] CollectTargetTreasure() called");
         if (isCollectInProgress) return;
 
         if (!servicesReady || string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey))
@@ -295,6 +296,9 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         // ── NEW: Check if this checkpoint has a challenge ─────────────────────
         bool hasChallenge = target.data.challenge != null
                          && target.data.challenge.type != ChallengeType.None;
+
+        Debug.Log($"[Collect] hasChallenge={hasChallenge}, challengeNull={(target.data.challenge == null)}, challengeType={(target.data.challenge != null ? target.data.challenge.type.ToString() : "null")}, runnerNull={(challengeRunner == null)}");
+
 
         if (hasChallenge && challengeRunner != null)
         {
@@ -478,19 +482,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         var hits = new List<ARRaycastHit>();
         var screenCenter = new Vector2(Screen.width / 2f, Screen.height / 2f);
 
-        if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon))
+        if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon | TrackableType.PlaneEstimated))
         {
             Pose hitPose = hits[0].pose;
-            Vector3 treasureGpsPos = GPSToUnityPosition(target.data.lat, target.data.lon);
-
-            float distanceToTargetSpot = Vector3.Distance(
-                new Vector3(hitPose.position.x, 0, hitPose.position.z),
-                new Vector3(treasureGpsPos.x, 0, treasureGpsPos.z));
-
-            if (distanceToTargetSpot <= revealRadius)
-            {
-                target.instance = Instantiate(treasurePrefab, hitPose.position, hitPose.rotation);
-            }
+            target.instance = Instantiate(treasurePrefab, hitPose.position, hitPose.rotation);
         }
     }
 

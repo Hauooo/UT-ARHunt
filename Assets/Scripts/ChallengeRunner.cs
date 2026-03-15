@@ -185,6 +185,7 @@ public class ChallengeRunner : MonoBehaviour
             case "BalloonPop_Hard":
                 if (balloonPopManager != null)
                 {
+                    challengePanel.SetActive(false); // hide the challenge UI while playing
                     balloonPopManager.StartGame(challenge, OnMinigameResult);
                     yield break;   // don't fall through to the fake timer
                 }

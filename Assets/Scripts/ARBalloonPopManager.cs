@@ -101,32 +101,37 @@ public class ARBalloonPopManager : MonoBehaviour
     private void Update()
     {
         if (!_gameActive) return;
+        if (Camera.main == null) return;
 
+        // 1) Get a tap/click position
         bool tapped = false;
-        Vector2 tapPosition = Vector2.zero;
+        Vector2 tapPosition = default;
 
 #if UNITY_EDITOR
-        if (Input.GetMouseButtonDown(0))
-        {
-            tapped     = true;
-            tapPosition = Input.mousePosition;
-        }
+    if (Input.GetMouseButtonDown(0))
+    {
+        tapped = true;
+        tapPosition = Input.mousePosition;
+    }
 #else
         if (Input.touchCount > 0 && Input.GetTouch(0).phase == TouchPhase.Began)
         {
-            tapped     = true;
+            tapped = true;
             tapPosition = Input.GetTouch(0).position;
         }
 #endif
 
         if (!tapped) return;
 
-        if (Camera.main == null) return;
-        Ray ray = Camera.main.ScreenPointToRay(tapPosition);
-        if (Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, _balloonLayerMask))
+        // 2) Raycast into the 3D world for balloons
+        Ray tapRay = Camera.main.ScreenPointToRay(tapPosition);
+        if (Physics.Raycast(tapRay, out RaycastHit tapHit, Mathf.Infinity, _balloonLayerMask))
         {
-            BalloonBehaviour balloon = hit.collider.GetComponentInParent<BalloonBehaviour>()
-                                    ?? hit.collider.GetComponent<BalloonBehaviour>();
+            // Prefer BalloonBehaviour on parent (common if collider is on child)
+            BalloonBehaviour balloon =
+                tapHit.collider.GetComponentInParent<BalloonBehaviour>() ??
+                tapHit.collider.GetComponent<BalloonBehaviour>();
+
             balloon?.Pop();
         }
     }
@@ -194,7 +199,12 @@ public class ARBalloonPopManager : MonoBehaviour
     /// </summary>
     private Vector3? TryGetARPlanePosition()
     {
-        if (arRaycastManager == null) return null;
+        
+        if (arRaycastManager == null)
+        {
+            Debug.LogWarning("[BalloonPop] arRaycastManager is null.");
+            return null;
+        }
 
         // Try a few random screen positions
         for (int attempt = 0; attempt < 5; attempt++)
@@ -210,7 +220,7 @@ public class ARBalloonPopManager : MonoBehaviour
                 return hitPose.position + Vector3.up * 0.3f;
             }
         }
-
+        Debug.Log("[BalloonPop] No plane hit found (try scanning environment).");
         return null;
     }
 
