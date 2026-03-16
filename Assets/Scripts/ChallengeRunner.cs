@@ -203,12 +203,13 @@ public class ChallengeRunner : MonoBehaviour
         StartCoroutine(DelayedComplete(success, bonus));
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     private IEnumerator DelayedComplete(bool success, int bonus)
     {
         yield return new WaitForSeconds(1.5f);
-        challengePanel.SetActive(false);
+
+        // ← MAKE SURE challengePanel IS SHOWN AGAIN
+        challengePanel.SetActive(true);
+
         onComplete?.Invoke(success, bonus);
     }
 }

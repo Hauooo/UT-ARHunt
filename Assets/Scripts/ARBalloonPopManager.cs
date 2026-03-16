@@ -186,6 +186,7 @@ public class ARBalloonPopManager : MonoBehaviour
         Vector3 spawnPos = TryGetARPlanePosition() ?? FallbackPosition();
 
         GameObject go = Instantiate(balloonPrefab, spawnPos, Quaternion.identity);
+
         _spawnedBalloons.Add(go);
 
         BalloonBehaviour balloon = go.GetComponent<BalloonBehaviour>();

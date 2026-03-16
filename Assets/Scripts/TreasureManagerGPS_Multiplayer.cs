@@ -248,9 +248,20 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         TreasureData newData = JsonUtility.FromJson<TreasureData>(args.Snapshot.GetRawJsonValue());
         localTreasures[key].data = newData;
 
-        // Disappear for everyone once ANYONE collected it
-        bool collectedByAnyone = newData.collectedBy != null && newData.collectedBy.Count > 0;
-        if (!collectedByAnyone) return;
+        // Check if treasure has been marked as collected (disappears for everyone)
+        bool isMarkedCollected = false;
+
+        // Try to get isCollected flag from the snapshot
+        var snapshot = args.Snapshot;
+        if (snapshot.HasChild("isCollected"))
+        {
+            object isCollectedObj = snapshot.Child("isCollected").Value;
+            if (isCollectedObj is bool boolVal)
+                isMarkedCollected = boolVal;
+        }
+
+        // If treasure is marked as collected, disappear for everyone
+        if (!isMarkedCollected) return;
 
         LogToUI($"Treasure '{newData.name}' was collected!");
 
@@ -357,16 +368,23 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             else
                 collectedBy = new Dictionary<string, object>();
 
-            // If ANYONE already collected it, abort
-            if (collectedBy.Count > 0)
+            // If THIS USER already collected it, abort
+            if (collectedBy.ContainsKey(myUserId))
             {
                 abortedAlreadyCollected = true;
                 return TransactionResult.Abort();
             }
 
-            // First collector wins
+            // Add this user to the collectors
             collectedBy[myUserId] = true;
+
+            // ── NEW: If this is the last allowed collector, mark for deletion ──
+            // For now, treasures disappear after first collection
+            // If you want it to disappear after ALL players collect it, modify this logic
             data["collectedBy"] = collectedBy;
+
+            // Mark treasure for deletion in the database (so it disappears for everyone)
+            data["isCollected"] = true;
 
             // ── NEW: write bonus points into the record ───────────────────────
             if (bonusPoints > 0)
@@ -384,7 +402,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             {
                 if (abortedAlreadyCollected)
                 {
-                    LogToUI("Already collected by someone.");
+                    LogToUI("You already collected this treasure!.");
                     if (collectButton != null)
                     {
                         collectButton.gameObject.SetActive(false);
