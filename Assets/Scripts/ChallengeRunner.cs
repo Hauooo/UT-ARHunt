@@ -28,7 +28,6 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private Button launchMinigameButton;
 
     [Header("AR Minigames")]
-    [SerializeField] private ARBalloonPopManager balloonPopManager;
 
     [Header("Shared")]
     [SerializeField] private Button skipButton;   // optional — creator can disable
@@ -72,7 +71,6 @@ public class ChallengeRunner : MonoBehaviour
                 break;
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
-            case ChallengeType.BalloonPop:
                 ShowMinigameLauncher(challenge);
                 break;
         }
@@ -154,8 +152,6 @@ public class ChallengeRunner : MonoBehaviour
             "MemoryMatch_Easy" => "🃏 Memory Match (Easy)",
             "MemoryMatch_Hard" => "🃏 Memory Match (Hard)",
             "OrderSequence"    => "🔢 Order Sequence",
-            "BalloonPop_Easy"  => "🎈 Pop the Balloons! (Easy)",
-            "BalloonPop_Hard"  => "🎈 Pop the Balloons! (Hard)",
             _                  => challenge.minigameId
         };
 
@@ -181,15 +177,6 @@ public class ChallengeRunner : MonoBehaviour
             case "OrderSequence":
                 // TODO: OrderSequenceManager.Instance.StartGame(challenge, OnMinigameResult);
                 break;
-            case "BalloonPop_Easy":
-            case "BalloonPop_Hard":
-                if (balloonPopManager != null)
-                {
-                    challengePanel.SetActive(false); // hide the challenge UI while playing
-                    balloonPopManager.StartGame(challenge, OnMinigameResult);
-                    yield break;   // don't fall through to the fake timer
-                }
-                break;
         }
 
         // Placeholder: simulate minigame result after 3 seconds (MemoryMatch / OrderSequence TODO)
@@ -209,6 +196,8 @@ public class ChallengeRunner : MonoBehaviour
 
         // ← MAKE SURE challengePanel IS SHOWN AGAIN
         challengePanel.SetActive(true);
+        
+
 
         onComplete?.Invoke(success, bonus);
     }
