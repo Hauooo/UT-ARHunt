@@ -28,6 +28,7 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private Button launchMinigameButton;
 
     [Header("AR Minigames")]
+    [SerializeField] private MemoryMatchManager memoryMatchManager; // assign in inspector
 
     [Header("Shared")]
     [SerializeField] private Button skipButton;   // optional — creator can disable
@@ -173,7 +174,18 @@ public class ChallengeRunner : MonoBehaviour
             case "MemoryMatch_Easy":
             case "MemoryMatch_Hard":
                 // TODO: MemoryMatchManager.Instance.StartGame(challenge, OnMinigameResult);
-                break;
+                if(memoryMatchManager != null)
+                {
+                    challengePanel.SetActive(false); // hide main panel while minigame is active
+                    memoryMatchManager.StartGame(challenge, OnMinigameResult);
+                    yield break; // wait for minigame callback instead of simulating result
+                }
+                else
+                {
+                    Debug.LogWarning("MemoryMatchManager reference not set in ChallengeRunner.");
+                    OnMinigameResult(false); // fail gracefully
+                }
+                    break;
             case "OrderSequence":
                 // TODO: OrderSequenceManager.Instance.StartGame(challenge, OnMinigameResult);
                 break;
@@ -196,7 +208,8 @@ public class ChallengeRunner : MonoBehaviour
 
         // ← MAKE SURE challengePanel IS SHOWN AGAIN
         challengePanel.SetActive(true);
-        
+        if (memoryMatchManager != null)
+            memoryMatchManager.StopGame(); // Ensure minigame is cleaned up
 
 
         onComplete?.Invoke(success, bonus);
