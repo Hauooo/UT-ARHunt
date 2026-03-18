@@ -200,6 +200,12 @@ public class GameManager : MonoBehaviour
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(AuthManager.Instance?.User?.DisplayName))
+        {
+            OnJoinFailed?.Invoke("Please set your username first.");
+            return;
+        }
+
         HostNewRoomAsync(treasureSet).ContinueWithOnMainThread(t =>
         {
             if (t.IsFaulted)
@@ -266,6 +272,12 @@ public class GameManager : MonoBehaviour
         if (string.IsNullOrEmpty(normalizedRoomId))
         {
             OnJoinFailed?.Invoke("Room code is empty.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(AuthManager.Instance?.User?.DisplayName))
+        {
+            OnJoinFailed?.Invoke("Please set your username first.");
             return;
         }
 
@@ -343,17 +355,46 @@ public class GameManager : MonoBehaviour
         if (string.IsNullOrEmpty(CurrentRoomId)) return;
 
         EnsureFirebaseReady("LeaveRoom");
-        if (!isFirebaseReady) return;
+        if (!isFirebaseReady || dbRef == null) return;
 
-        dbRef.Child("rooms").Child(CurrentRoomId).Child("players").Child(AuthManager.Instance.UserId).RemoveValueAsync();
+        string roomId = CurrentRoomId;
+        string myUid = AuthManager.Instance?.UserId;
 
-        StopListeningToRoomUpdates();
+        if (IsHost)
+        {
+            // Host leaving: close room for everyone, then delete
+            dbRef.Child("rooms").Child(roomId).Child("status")
+                .SetValueAsync("ended")
+                .ContinueWithOnMainThread(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        Debug.LogError("[GameManager] Failed to set room status to ended: " + t.Exception);
+                    }
 
-        CurrentRoomId = null;
-        IsHost = false;
-        CurrentMode = GameMode.InMenu;
+                    // small delay optional; helps clients receive 'ended'
+                    StartCoroutine(DeleteRoomAfterDelay(roomId, 0.75f));
 
-        SceneManager.LoadScene("MenuScene");
+                    StopListeningToRoomUpdates();
+                    CurrentPlayers = new Dictionary<string, PlayerData>();
+                    CurrentRoomId = null;
+                    IsHost = false;
+                    CurrentMode = GameMode.InMenu;
+                    SceneManager.LoadScene("MenuScene");
+                });
+        }
+        else
+        {
+            // Participant leaving: remove only this player
+            dbRef.Child("rooms").Child(roomId).Child("players").Child(myUid).RemoveValueAsync();
+
+            StopListeningToRoomUpdates();
+            CurrentPlayers = new Dictionary<string, PlayerData>();
+            CurrentRoomId = null;
+            IsHost = false;
+            CurrentMode = GameMode.InMenu;
+            SceneManager.LoadScene("MenuScene");
+        }
     }
 
     #endregion

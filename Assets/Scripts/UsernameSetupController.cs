@@ -6,15 +6,16 @@ using Firebase.Extensions;
 
 public class UsernameSetupController : MonoBehaviour
 {
-    [Header("UI")]
-    [SerializeField] private GameObject panelRott;
+    [SerializeField] private GameObject panelRoot;
     [SerializeField] private TMP_InputField usernameInput;
     [SerializeField] private Button saveButton;
+    [SerializeField] private Button cancelButton;   // optional (hide for first-time)
     [SerializeField] private TMP_Text feedbackText;
 
-    [Header("Rules")]
     [SerializeField] private int minLength = 3;
     [SerializeField] private int maxLength = 20;
+
+    private bool isMandatory = false; // true on first app open if missing username
 
     private void Awake()
     {
@@ -24,74 +25,71 @@ public class UsernameSetupController : MonoBehaviour
             saveButton.onClick.AddListener(OnSaveClicked);
         }
 
-        ShowIfNeeded();
+        if (cancelButton != null)
+        {
+            cancelButton.onClick.RemoveAllListeners();
+            cancelButton.onClick.AddListener(CloseIfAllowed);
+        }
     }
 
-    public void ShowIfNeeded()
+    public void Open(bool mandatory)
     {
-        var user = FirebaseAuth.DefaultInstance.CurrentUser;
-        if (user == null)
-        {
-            Debug.LogError("[UsernameSetup] No authenticated user found.");
-            panelRott.SetActive(false);
-            return;
-        }
-        if (string.IsNullOrEmpty(user.DisplayName))
-        {
-            panelRott.SetActive(true);
-            feedbackText.text = $"Please choose a username ({minLength}-{maxLength} chars).";
-        }
-        else
-        {
-            panelRott.SetActive(false);
-        }
+        isMandatory = mandatory;
+
+        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+        string currentName = user?.DisplayName ?? "";
+
+        if (usernameInput != null) usernameInput.text = currentName;
+        if (feedbackText != null) feedbackText.text = mandatory ? "Please set your username." : "";
+
+        if (cancelButton != null) cancelButton.gameObject.SetActive(!mandatory);
+        if (panelRoot != null) panelRoot.SetActive(true);
     }
 
+    public void CloseIfAllowed()
+    {
+        if (isMandatory) return;
+        if (panelRoot != null) panelRoot.SetActive(false);
+    }
 
     private void OnSaveClicked()
     {
-        var user = FirebaseAuth.DefaultInstance.CurrentUser;
-        if (user == null)
+        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+        if (user == null) { SetFeedback("Not signed in."); return; }
+
+        string name = usernameInput != null ? usernameInput.text.Trim() : "";
+        if (!IsValid(name))
         {
-            Debug.LogError("[UsernameSetup] No authenticated user found.");
-            feedbackText.text = "Error: No authenticated user.";
+            SetFeedback($"Username must be {minLength}-{maxLength} chars.");
             return;
         }
-        string newName = usernameInput.text.Trim();
-        if (newName.Length < minLength || newName.Length > maxLength)
-        {
-            feedbackText.text = $"Username must be {minLength}-{maxLength} characters.";
-            return;
-        }
-        saveButton.interactable = false;
-        feedbackText.text = "Saving username...";
-        UserProfile profile = new UserProfile { DisplayName = newName };
+
+        SetFeedback("Saving...");
+        var profile = new UserProfile { DisplayName = name };
+
         user.UpdateUserProfileAsync(profile).ContinueWithOnMainThread(task =>
         {
             if (task.IsFaulted || task.IsCanceled)
             {
-                Debug.LogError("[UsernameSetup] Failed to update username: " + task.Exception);
-                feedbackText.text = "Failed to save username. Try again.";
-                saveButton.interactable = true;
+                SetFeedback("Failed to save username.");
+                Debug.LogError("[UsernameSetup] Save failed: " + task.Exception);
+                return;
             }
-            else
-            {
-                feedbackText.text = "Username saved!";
-                panelRott.SetActive(false);
-            }
+
+            SetFeedback("Saved!");
+            if (panelRoot != null) panelRoot.SetActive(false);
+            isMandatory = false;
         });
     }
 
-    private bool IsValidUsername(string name)
+    private bool IsValid(string n)
     {
-        if (string.IsNullOrWhiteSpace(name)) return false;
-        if (name.Length < minLength || name.Length > maxLength) return false;
-        // Additional checks (e.g. profanity filter) can be added here
-        return true;
+        if (string.IsNullOrWhiteSpace(n)) return false;
+        return n.Length >= minLength && n.Length <= maxLength;
     }
 
-    private void SetFeedback(string message)
+    private void SetFeedback(string msg)
     {
-        if (feedbackText != null) feedbackText.text = message;
+        if (feedbackText != null) feedbackText.text = msg;
     }
 }

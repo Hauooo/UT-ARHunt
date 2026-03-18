@@ -8,6 +8,7 @@ public class MenuManager : MonoBehaviour
     // NEW panels
     public GameObject playerPanel;
     public GameObject creatorPanel;
+    public GameObject usernamePanel;
 
     // Existing panels (keep if still used elsewhere)
     public GameObject joinRoomPanel;
@@ -69,6 +70,9 @@ public class MenuManager : MonoBehaviour
     public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
 
     public void OnCreateButton() => GameManager.Instance.StartCreatorMode();
+
+    //change username
+    public void OnChangeUsernameButton() => ShowPanel(usernamePanel);
 
     private void HandleLobbyReady(string roomId, bool isHost)
     {
