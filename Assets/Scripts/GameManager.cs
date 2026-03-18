@@ -24,7 +24,8 @@ public class GameManager : MonoBehaviour
 
     [Header("Scene Configuration")]
     [SerializeField] private string arSceneName = "ARScene";
-
+    [SerializeField] private string scoreboardSceneName = "ScoreboardScene";
+    
     [Header("Firebase")]
     [SerializeField]
     private string firebaseDatabaseUrl =
@@ -447,8 +448,9 @@ public class GameManager : MonoBehaviour
         // ✅ NEW: end-game signal for everyone
         if (status == "ended")
         {
-            Debug.Log("[GameManager] Room ended. Returning to menu.");
-            ReturnToMenu();
+            Debug.Log("[GameManager] Room ended. Loading Scoreboard scene.");
+            StopListeningToRoomUpdates();
+            SceneManager.LoadScene(scoreboardSceneName);;
             return;
         }
 
@@ -467,62 +469,99 @@ public class GameManager : MonoBehaviour
 
     #region --- End Game Logic ---
     public void EndGame()
-{
-    if (!IsHost)
     {
-        Debug.LogWarning("[GameManager] EndGame blocked: only host can end the game.");
-        return;
-    }
-
-    if (string.IsNullOrEmpty(CurrentRoomId))
-    {
-        Debug.LogWarning("[GameManager] EndGame blocked: CurrentRoomId is empty.");
-        return;
-    }
-
-    EnsureFirebaseReady("EndGame");
-    if (!isFirebaseReady || dbRef == null)
-    {
-        Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
-        return;
-    }
-
-    string roomId = CurrentRoomId;
-    var roomRef = dbRef.Child("rooms").Child(roomId);
-
-    Debug.Log($"[GameManager] Host ending game. Setting status=ended for room {roomId}...");
-
-    // 1) Signal all clients first
-    roomRef.Child("status").SetValueAsync("ended").ContinueWithOnMainThread(setTask =>
-    {
-        if (setTask.IsFaulted)
+        if (!IsHost)
         {
-            Debug.LogError("[GameManager] Failed to set ended status: " + setTask.Exception);
+            Debug.LogWarning("[GameManager] EndGame blocked: only host can end the game.");
             return;
         }
 
-        // 2) Host can return immediately (others will return via HandleStatusChanged)
-        ReturnToMenu();
+        if (string.IsNullOrEmpty(CurrentRoomId))
+        {
+            Debug.LogWarning("[GameManager] EndGame blocked: CurrentRoomId is empty.");
+            return;
+        }
 
-        // 3) Cleanup room after a short delay so everyone receives the status update
-        StartCoroutine(DeleteRoomAfterDelay(roomId, 1.0f));
-    });
-}
+        EnsureFirebaseReady("EndGame");
+        if (!isFirebaseReady || dbRef == null)
+        {
+            Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
+            return;
+        }
+            dbRef.Child("rooms").Child(CurrentRoomId).Child("status").SetValueAsync("ended");
 
-private IEnumerator DeleteRoomAfterDelay(string roomId, float delaySeconds)
-{
-    yield return new WaitForSeconds(delaySeconds);
+            string roomId = CurrentRoomId;
+        var roomRef = dbRef.Child("rooms").Child(roomId);
 
-    EnsureFirebaseReady("DeleteRoomAfterDelay");
-    if (!isFirebaseReady || dbRef == null) yield break;
+        Debug.Log($"[GameManager] Host ending game. Setting status=ended for room {roomId}...");
 
-    Debug.Log($"[GameManager] Deleting room {roomId}...");
-    dbRef.Child("rooms").Child(roomId).RemoveValueAsync().ContinueWithOnMainThread(t =>
+        // 1) Signal all clients first
+        roomRef.Child("status").SetValueAsync("ended").ContinueWithOnMainThread(setTask =>
+        {
+            if (setTask.IsFaulted)
+            {
+                Debug.LogError("[GameManager] Failed to set ended status: " + setTask.Exception);
+                return;
+            }
+
+            // 2) Host can return immediately (others will return via HandleStatusChanged)
+            ReturnToMenu();
+
+            // 3) Cleanup room after a short delay so everyone receives the status update
+            StartCoroutine(DeleteRoomAfterDelay(roomId, 1.0f));
+        });
+    }
+
+    public void LeaveScoreboard()
     {
-        if (t.IsFaulted) Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
-        else Debug.Log($"[GameManager] Room {roomId} deleted.");
-    });
-}
+        if (string.IsNullOrEmpty(CurrentRoomId)) { ReturnToMenu(); return; }
+
+        EnsureFirebaseReady("LeaveScoreboard");
+        if (!isFirebaseReady || dbRef == null) { ReturnToMenu(); return; }
+
+        string roomId = CurrentRoomId;
+        string uid = AuthManager.Instance.UserId;
+        var playersRef = dbRef.Child("rooms").Child(roomId).Child("players");
+
+        // 1) remove self
+        playersRef.Child(uid).RemoveValueAsync().ContinueWithOnMainThread(_ =>
+        {
+            // 2) check remaining players
+            playersRef.GetValueAsync().ContinueWithOnMainThread(t =>
+            {
+                if (!t.IsFaulted)
+                {
+                    bool anyLeft = t.Result.Exists && t.Result.ChildrenCount > 0;
+                    if (!anyLeft)
+                    {
+                        Debug.Log($"[GameManager] No players left. Deleting room {roomId}");
+                        dbRef.Child("rooms").Child(roomId).RemoveValueAsync();
+                    }
+                }
+
+                CurrentPlayers = new Dictionary<string, PlayerData>();
+                CurrentRoomId = null;
+                IsHost = false;
+                CurrentMode = GameMode.InMenu;
+                SceneManager.LoadScene("MenuScene");
+            });
+        });
+    }
+
+    private IEnumerator DeleteRoomAfterDelay(string roomId, float delaySeconds)
+    {
+        yield return new WaitForSeconds(delaySeconds);
+
+        EnsureFirebaseReady("DeleteRoomAfterDelay");
+        if (!isFirebaseReady || dbRef == null) yield break;
+
+        Debug.Log($"[GameManager] Deleting room {roomId}...");
+        dbRef.Child("rooms").Child(roomId).RemoveValueAsync().ContinueWithOnMainThread(t =>
+        {
+            if (t.IsFaulted) Debug.LogError("[GameManager] Failed to delete room: " + t.Exception);
+            else Debug.Log($"[GameManager] Room {roomId} deleted.");
+        });
+    }
 
 #endregion
 
