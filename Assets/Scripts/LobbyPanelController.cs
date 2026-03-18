@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
@@ -20,6 +20,13 @@ public class LobbyPanelController : MonoBehaviour
         {
             Debug.LogError("[LobbyPanelController] GameManager.Instance is null.");
             return;
+            var gamem = GameManager.Instance;
+            if (gamem != null && !string.IsNullOrEmpty(gamem.CurrentRoomId))
+            {
+                HandleLobbyReady(gamem.CurrentRoomId, gamem.IsHost);
+                HandlePlayerListUpdated(gamem.CurrentPlayers); // ✅ immediate populate
+                Debug.Log($"[LobbyPanelController] Hydrating lobby. roomId={gamem.CurrentRoomId}, cachedPlayers={gamem.CurrentPlayers?.Count ?? 0}");
+            }
         }
 
         if (roomCodeText == null) Debug.LogError("[LobbyPanelController] roomCodeText not assigned.");
@@ -74,15 +81,52 @@ public class LobbyPanelController : MonoBehaviour
 
     private void HandlePlayerListUpdated(Dictionary<string, PlayerData> players)
     {
-        foreach (Transform child in playerListContent)
+        Debug.Log("[LobbyPanelController] HandlePlayerListUpdated called.");
+
+        if (playerListContent == null)
         {
-            Destroy(child.gameObject);
+            Debug.LogError("[LobbyPanelController] playerListContent is NULL.");
+            return;
         }
 
-        foreach (var player in players.Values)
+        if (playerListItemPrefab == null)
         {
-            GameObject newPlayerItem = Instantiate(playerListItemPrefab, playerListContent);
-            newPlayerItem.GetComponentInChildren<TMP_Text>().text = player.displayName;
+            Debug.LogError("[LobbyPanelController] playerListItemPrefab is NULL.");
+            return;
         }
+
+        int incomingCount = players?.Count ?? 0;
+        Debug.Log($"[LobbyPanelController] Incoming players count: {incomingCount}");
+
+        foreach (Transform child in playerListContent)
+            Destroy(child.gameObject);
+
+        if (players == null || players.Count == 0)
+        {
+            Debug.LogWarning("[LobbyPanelController] No players to display (list is empty).");
+            Debug.Log($"[LobbyPanelController] UI children after clear: {playerListContent.childCount}");
+            return;
+        }
+
+        foreach (var kvp in players)
+        {
+            string uid = kvp.Key;
+            PlayerData player = kvp.Value;
+
+            GameObject newPlayerItem = Instantiate(playerListItemPrefab, playerListContent);
+            var label = newPlayerItem.GetComponentInChildren<TMP_Text>(true);
+
+            if (label != null)
+            {
+                label.text = player.displayName;
+                Debug.Log($"[LobbyPanelController] Displayed player: uid={uid}, name={player.displayName}");
+            }
+            else
+            {
+                Debug.LogError($"[LobbyPanelController] TMP_Text missing on playerListItemPrefab for uid={uid}");
+            }
+        }
+
+        Debug.Log($"[LobbyPanelController] Player list render complete. Spawned UI items: {playerListContent.childCount}");
     }
 }

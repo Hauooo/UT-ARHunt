@@ -42,6 +42,7 @@ public class GameManager : MonoBehaviour
     public event Action<Dictionary<string, PlayerData>> OnPlayerListUpdated;
     public event Action OnGameStarting;
     public event Action<string> OnJoinFailed;
+    public Dictionary<string, PlayerData> CurrentPlayers { get; private set; } = new Dictionary<string, PlayerData>();
 
     // --- Private State ---
     private DatabaseReference dbRef;
@@ -153,6 +154,37 @@ public class GameManager : MonoBehaviour
 
     #region --- Public API for UI ---
 
+    private string GetSafeDisplayName(string fallback)
+    {
+        string raw = AuthManager.Instance?.User?.DisplayName;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            string uid = AuthManager.Instance?.UserId;
+            if (!string.IsNullOrEmpty(uid) && uid.Length >= 4)
+                return $"{fallback}-{uid.Substring(0, 4)}";
+            return fallback;
+        }
+        return raw.Trim();
+    }
+
+    private async System.Threading.Tasks.Task<string> GetUniqueRoomCodeAsync(int maxAttempts = 10)
+    {
+        EnsureFirebaseReady("GetUniqueRoomCodeAsync");
+        if (!isFirebaseReady || dbRef == null)
+            throw new Exception("Firebase not ready.");
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            string code = GenerateRoomCode();
+
+            var snapshot = await dbRef.Child("rooms").Child(code).GetValueAsync();
+            if (!snapshot.Exists)
+                return code;
+        }
+
+        throw new Exception($"Failed to generate unique room code after {maxAttempts} attempts.");
+    }
+
     public void HostNewRoom(TreasureSetData treasureSet)
     {
         EnsureFirebaseReady("HostNewRoom");
@@ -168,27 +200,37 @@ public class GameManager : MonoBehaviour
             return;
         }
 
+        HostNewRoomAsync(treasureSet).ContinueWithOnMainThread(t =>
+        {
+            if (t.IsFaulted)
+                Debug.LogError("[GameManager] HostNewRoomAsync failed: " + t.Exception);
+        });
+    }
+
+    private async System.Threading.Tasks.Task HostNewRoomAsync(TreasureSetData treasureSet)
+    {
         IsHost = true;
-        CurrentRoomId = GenerateRoomCode();
         CurrentMode = GameMode.PlayingInRoom;
+        CurrentRoomId = await GetUniqueRoomCodeAsync();
 
         var roomRef = dbRef.Child("rooms").Child(CurrentRoomId);
+        string hostUid = AuthManager.Instance.UserId;
+        string hostDisplayName = GetSafeDisplayName("Host");
 
-        // Write room metadata (JsonUtility cannot serialize dictionaries, so do not write RoomData as one JSON blob)
-        var tasks = new List<System.Threading.Tasks.Task>();
+        var tasks = new List<System.Threading.Tasks.Task>
+    {
+        roomRef.Child("hostId").SetValueAsync(hostUid),
+        roomRef.Child("hostName").SetValueAsync(hostDisplayName),
+        roomRef.Child("selectedSetId").SetValueAsync(treasureSet.setId),
+        roomRef.Child("status").SetValueAsync("waiting"),
+        roomRef.Child("players").Child(hostUid)
+            .SetRawJsonValueAsync(JsonUtility.ToJson(new PlayerData(hostDisplayName, 0)))
+    };
 
-        tasks.Add(roomRef.Child("hostId").SetValueAsync(AuthManager.Instance.UserId));
-        tasks.Add(roomRef.Child("hostName").SetValueAsync(AuthManager.Instance.User.DisplayName ?? "The Host"));
-        tasks.Add(roomRef.Child("selectedSetId").SetValueAsync(treasureSet.setId));
-        tasks.Add(roomRef.Child("status").SetValueAsync("waiting"));
-
-        
-        // Write treasure game state
         var gameStateRef = roomRef.Child("gameState");
         foreach (var treasure in treasureSet.treasures)
         {
             string liveTreasureKey = gameStateRef.Push().Key;
-
             var liveTreasure = new TreasureManagerGPS_Multiplayer.TreasureData
             {
                 name = treasure.name,
@@ -196,25 +238,18 @@ public class GameManager : MonoBehaviour
                 lon = treasure.lon,
                 points = treasure.points,
                 challenge = treasure.challenge,
-                collectedBy = null // let it be missing initially; treat null as "not collected"
+                collectedBy = null
             };
 
             tasks.Add(gameStateRef.Child(liveTreasureKey)
                 .SetRawJsonValueAsync(JsonUtility.ToJson(liveTreasure)));
         }
 
-        System.Threading.Tasks.Task.WhenAll(tasks).ContinueWithOnMainThread(t =>
-        {
-            if (t.IsFaulted)
-            {
-                Debug.LogError("Failed to host room: " + t.Exception);
-                return;
-            }
+        await System.Threading.Tasks.Task.WhenAll(tasks);
 
-            Debug.Log($"Room {CurrentRoomId} hosted successfully!");
-            ListenToRoomUpdates(CurrentRoomId);
-            OnLobbyReady?.Invoke(CurrentRoomId, true);
-        });
+        Debug.Log($"Room {CurrentRoomId} hosted successfully!");
+        ListenToRoomUpdates(CurrentRoomId);
+        OnLobbyReady?.Invoke(CurrentRoomId, true);
     }
 
     public void JoinRoomById(string roomId)
@@ -272,7 +307,7 @@ public class GameManager : MonoBehaviour
             CurrentRoomId = normalizedRoomId;
             CurrentMode = GameMode.PlayingInRoom;
 
-            var newPlayer = new PlayerData(AuthManager.Instance.User.DisplayName ?? "A Player", 0);
+            var newPlayer = new PlayerData(GetSafeDisplayName("Player"), 0);
             roomRef.Child("players").Child(myUid)
                 .SetRawJsonValueAsync(JsonUtility.ToJson(newPlayer))
                 .ContinueWithOnMainThread(joinTask =>
@@ -341,16 +376,19 @@ public class GameManager : MonoBehaviour
 
     private void HandlePlayerListChanged(object sender, ValueChangedEventArgs args)
     {
-        if (!args.Snapshot.Exists) return;
-
         var playersDict = new Dictionary<string, PlayerData>();
-        foreach (var child in args.Snapshot.Children)
+
+        if (args.Snapshot.Exists)
         {
-            string json = child.GetRawJsonValue();
-            PlayerData playerData = JsonUtility.FromJson<PlayerData>(json);
-            playersDict[child.Key] = playerData;
+            foreach (var child in args.Snapshot.Children)
+            {
+                string json = child.GetRawJsonValue();
+                PlayerData playerData = JsonUtility.FromJson<PlayerData>(json);
+                playersDict[child.Key] = playerData;
+            }
         }
 
+        CurrentPlayers = playersDict; // ✅ cache latest
         OnPlayerListUpdated?.Invoke(playersDict);
     }
 

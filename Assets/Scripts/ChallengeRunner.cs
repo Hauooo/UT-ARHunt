@@ -4,10 +4,6 @@ using TMPro;
 using System.Collections;
 using System.Collections.Generic;
 
-/// <summary>
-/// Shown to the player when they reach a checkpoint that has a challenge.
-/// Handles MCQ display, answer checking, minigame launching, and result callbacks.
-/// </summary>
 public class ChallengeRunner : MonoBehaviour
 {
     [Header("Panel")]
@@ -16,8 +12,8 @@ public class ChallengeRunner : MonoBehaviour
     [Header("MCQ UI")]
     [SerializeField] private GameObject mcqPanel;
     [SerializeField] private TMP_Text questionText;
-    [SerializeField] private Button[] answerButtons;        // 4 buttons
-    [SerializeField] private TMP_Text[] answerButtonLabels; // TMP_Text on each button
+    [SerializeField] private Button[] answerButtons;
+    [SerializeField] private TMP_Text[] answerButtonLabels;
     [SerializeField] private TMP_Text attemptsText;
     [SerializeField] private TMP_Text resultText;
 
@@ -28,33 +24,45 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private Button launchMinigameButton;
 
     [Header("AR Minigames")]
-    [SerializeField] private MemoryMatchManager memoryMatchManager; // assign in inspector
+    [SerializeField] private MemoryMatchManager memoryMatchManager;
 
     [Header("Shared")]
-    [SerializeField] private Button skipButton;   // optional — creator can disable
+    [SerializeField] private Button skipButton;
+    [SerializeField] private Button retryButton; // NEW
 
-    // ── State ─────────────────────────────────────────────────────────────────
     private ChallengeData currentChallenge;
     private int attemptsLeft;
-    private System.Action<bool, int> onComplete; // (success, bonusPoints)
-
-    // ─────────────────────────────────────────────────────────────────────────
+    private System.Action<bool, int> onComplete;
+    private bool awaitingRetryChoice;
 
     private void Awake()
     {
         challengePanel.SetActive(false);
+
+        if (skipButton != null)
+        {
+            skipButton.onClick.RemoveAllListeners();
+            skipButton.onClick.AddListener(OnSkipClicked);
+        }
+
+        if (retryButton != null)
+        {
+            retryButton.onClick.RemoveAllListeners();
+            retryButton.onClick.AddListener(OnRetryClicked);
+            retryButton.gameObject.SetActive(false);
+        }
+
+        if (launchMinigameButton != null)
+        {
+            launchMinigameButton.onClick.RemoveAllListeners();
+            launchMinigameButton.onClick.AddListener(OnLaunchMinigameClicked);
+        }
     }
 
-    /// <summary>
-    /// Call this when a player reaches a checkpoint with a challenge.
-    /// </summary>
-    /// <param name="challenge">The challenge data from TreasureData</param>
-    /// <param name="onComplete">Callback: (wasSuccessful, bonusPointsEarned)</param>
     public void RunChallenge(ChallengeData challenge, System.Action<bool, int> onComplete)
     {
         if (challenge == null || challenge.type == ChallengeType.None)
         {
-            // No challenge — instant success
             onComplete?.Invoke(true, 0);
             return;
         }
@@ -62,8 +70,13 @@ public class ChallengeRunner : MonoBehaviour
         currentChallenge = challenge;
         this.onComplete = onComplete;
         attemptsLeft = challenge.maxAttempts;
+        awaitingRetryChoice = false;
 
         challengePanel.SetActive(true);
+        resultText.text = "";
+
+        if (retryButton != null) retryButton.gameObject.SetActive(false);
+        if (skipButton != null) skipButton.gameObject.SetActive(true);
 
         switch (challenge.type)
         {
@@ -77,18 +90,13 @@ public class ChallengeRunner : MonoBehaviour
         }
     }
 
-    // ── MCQ ───────────────────────────────────────────────────────────────────
-
     private void ShowMCQ(ChallengeData challenge)
     {
         mcqPanel.SetActive(true);
         minigamePanel.SetActive(false);
-
         questionText.text = challenge.question;
-        resultText.text = "";
         UpdateAttemptsText();
 
-        // Shuffle options for fairness
         var shuffled = new List<MCQOption>(challenge.options);
         shuffled.Sort((a, b) => Random.Range(-1, 2));
 
@@ -96,14 +104,11 @@ public class ChallengeRunner : MonoBehaviour
         {
             bool hasOption = i < shuffled.Count;
             answerButtons[i].gameObject.SetActive(hasOption);
-
             if (!hasOption) continue;
 
             answerButtonLabels[i].text = shuffled[i].text;
             bool isCorrect = shuffled[i].isCorrect;
 
-            // Capture for closure
-            int capturedI = i;
             answerButtons[i].onClick.RemoveAllListeners();
             answerButtons[i].onClick.AddListener(() => OnAnswerSelected(isCorrect));
         }
@@ -113,105 +118,108 @@ public class ChallengeRunner : MonoBehaviour
     {
         if (isCorrect)
         {
-            resultText.text = "✅ Correct! Checkpoint unlocked!";
-            resultText.color = Color.green;
+            resultText.text = "✅ Correct!";
             StartCoroutine(DelayedComplete(true, currentChallenge.bonusPoints));
+            return;
+        }
+
+        attemptsLeft--;
+        UpdateAttemptsText();
+
+        if (attemptsLeft <= 0)
+        {
+            resultText.text = "❌ Failed. You can skip.";
+            StartCoroutine(DelayedComplete(false, 0));
         }
         else
         {
-            attemptsLeft--;
-            UpdateAttemptsText();
-
-            if (attemptsLeft <= 0)
-            {
-                resultText.text = "❌ No attempts left. Checkpoint failed.";
-                resultText.color = Color.red;
-                StartCoroutine(DelayedComplete(false, 0));
-            }
-            else
-            {
-                resultText.text = $"❌ Wrong! {attemptsLeft} attempt(s) remaining.";
-                resultText.color = Color.yellow;
-            }
+            resultText.text = $"❌ Wrong! {attemptsLeft} left.";
         }
     }
 
-    private void UpdateAttemptsText()
-    {
-        attemptsText.text = $"Attempts left: {attemptsLeft}";
-    }
-
-    // ── Minigame Launcher ─────────────────────────────────────────────────────
+    private void UpdateAttemptsText() => attemptsText.text = $"Attempts left: {attemptsLeft}";
 
     private void ShowMinigameLauncher(ChallengeData challenge)
     {
         mcqPanel.SetActive(false);
         minigamePanel.SetActive(true);
 
-        string displayName = challenge.minigameId switch
-        {
-            "MemoryMatch_Easy" => "🃏 Memory Match (Easy)",
-            "MemoryMatch_Hard" => "🃏 Memory Match (Hard)",
-            "OrderSequence"    => "🔢 Order Sequence",
-            _                  => challenge.minigameId
-        };
-
-        minigameNameText.text = $"Challenge: {displayName}\nTime limit: {challenge.timeLimitSeconds}s";
+        minigameNameText.text = $"Challenge: {challenge.minigameId}\nTime limit: {challenge.timeLimitSeconds}s";
 
         launchMinigameButton.onClick.RemoveAllListeners();
-        launchMinigameButton.onClick.AddListener(() =>
-            StartCoroutine(LaunchMinigame(challenge)));
+        launchMinigameButton.onClick.AddListener(() => StartCoroutine(LaunchMinigame(challenge)));
+    }
+
+    private void OnLaunchMinigameClicked()
+    {
+        if (currentChallenge != null)
+            StartCoroutine(LaunchMinigame(currentChallenge));
     }
 
     private IEnumerator LaunchMinigame(ChallengeData challenge)
     {
+        awaitingRetryChoice = false;
         minigamePanel.SetActive(false);
+        if (retryButton != null) retryButton.gameObject.SetActive(false);
 
-        // ── Dispatch to the correct minigame manager ──────────────────────
-        // Replace these with your actual minigame scene/panel calls:
         switch (challenge.minigameId)
         {
             case "MemoryMatch_Easy":
             case "MemoryMatch_Hard":
-                // TODO: MemoryMatchManager.Instance.StartGame(challenge, OnMinigameResult);
-                if(memoryMatchManager != null)
+                if (memoryMatchManager != null)
                 {
-                    challengePanel.SetActive(false); // hide main panel while minigame is active
+                    challengePanel.SetActive(false);
                     memoryMatchManager.StartGame(challenge, OnMinigameResult);
-                    yield break; // wait for minigame callback instead of simulating result
+                    yield break;
                 }
-                else
-                {
-                    Debug.LogWarning("MemoryMatchManager reference not set in ChallengeRunner.");
-                    OnMinigameResult(false); // fail gracefully
-                }
-                    break;
-            case "OrderSequence":
-                // TODO: OrderSequenceManager.Instance.StartGame(challenge, OnMinigameResult);
-                break;
+                OnMinigameResult(false);
+                yield break;
         }
 
-        // Placeholder: simulate minigame result after 3 seconds (MemoryMatch / OrderSequence TODO)
         yield return new WaitForSeconds(3f);
-        OnMinigameResult(true); // replace with real callback
+        OnMinigameResult(false);
     }
 
     private void OnMinigameResult(bool success)
     {
-        int bonus = success ? currentChallenge.bonusPoints : 0;
-        StartCoroutine(DelayedComplete(success, bonus));
+        if (memoryMatchManager != null) memoryMatchManager.StopGame();
+
+        challengePanel.SetActive(true);
+
+        if (success)
+        {
+            resultText.text = "✅ Minigame completed!";
+            StartCoroutine(DelayedComplete(true, currentChallenge.bonusPoints));
+        }
+        else
+        {
+            // KEY FIX: don't auto-complete fail; wait for user action
+            awaitingRetryChoice = true;
+            resultText.text = "❌ Minigame failed. Retry or Skip?";
+            minigamePanel.SetActive(true);
+
+            if (retryButton != null) retryButton.gameObject.SetActive(true);
+            if (skipButton != null) skipButton.gameObject.SetActive(true);
+        }
     }
 
     private IEnumerator DelayedComplete(bool success, int bonus)
     {
-        yield return new WaitForSeconds(1.5f);
-
-        // ← MAKE SURE challengePanel IS SHOWN AGAIN
-        challengePanel.SetActive(true);
-        if (memoryMatchManager != null)
-            memoryMatchManager.StopGame(); // Ensure minigame is cleaned up
-
-
+        yield return new WaitForSeconds(1.0f);
+        challengePanel.SetActive(false);
         onComplete?.Invoke(success, bonus);
+    }
+
+    private void OnRetryClicked()
+    {
+        if (!awaitingRetryChoice || currentChallenge == null) return;
+        resultText.text = "";
+        StartCoroutine(LaunchMinigame(currentChallenge));
+    }
+
+    private void OnSkipClicked()
+    {
+        challengePanel.SetActive(false);
+        onComplete?.Invoke(false, 0);
     }
 }
