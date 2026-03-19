@@ -125,6 +125,11 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         initialized = true;
         currentRoomId = roomId;
 
+        if (ScoreManager.Instance != null)
+        {
+            ScoreManager.Instance.StartGameTimer();
+        }
+
         authManager = AuthManager.Instance;
         locationManager = LocationManager.Instance;
 
@@ -429,8 +434,22 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // Update ScoreManager UI
             if (ScoreManager.Instance != null)
             {
-                ScoreManager.Instance.AddTreasurePoints();
-                LogToUI($"✅ Treasure collected! +{totalEarned} points");
+                
+                int currentScore = ScoreManager.Instance.GetScore();
+
+                // Save to Firebase
+                string userId = authManager.UserId;
+                dbRef.Child("rooms").Child(currentRoomId)
+                     .Child("players").Child(userId)
+                     .Child("currentScore")
+                     .SetValueAsync(currentScore)
+                     .ContinueWithOnMainThread(scoreTask =>
+                     {
+                         if (scoreTask.IsCompleted)
+                         {
+                             Debug.Log($"[TreasureManager] Score saved to Firebase: {currentScore}");
+                         }
+                     });
             }
 
             // Also save to Firebase for persistence
@@ -651,6 +670,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         return new Vector3((float)x, 0, (float)z);
     }
+
+
 
     private void LogToUI(string msg)
     {

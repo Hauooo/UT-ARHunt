@@ -514,19 +514,31 @@ public class GameManager : MonoBehaviour
 
     public void LeaveScoreboard()
     {
-        if (string.IsNullOrEmpty(CurrentRoomId)) { ReturnToMenu(); return; }
+        if (string.IsNullOrEmpty(CurrentRoomId))
+        {
+            ReturnToMenu();
+            return;
+        }
 
         EnsureFirebaseReady("LeaveScoreboard");
-        if (!isFirebaseReady || dbRef == null) { ReturnToMenu(); return; }
+        if (!isFirebaseReady || dbRef == null)
+        {
+            ReturnToMenu();
+            return;
+        }
 
         string roomId = CurrentRoomId;
         string uid = AuthManager.Instance.UserId;
         var playersRef = dbRef.Child("rooms").Child(roomId).Child("players");
 
-        // 1) remove self
+        Debug.Log($"[GameManager] LeaveScoreboard called. Removing player {uid} from room {roomId}");
+
+        // 1) Remove self from players list
         playersRef.Child(uid).RemoveValueAsync().ContinueWithOnMainThread(_ =>
         {
-            // 2) check remaining players
+            Debug.Log("[GameManager] Player removed from room");
+
+            // 2) Check if any players remain
             playersRef.GetValueAsync().ContinueWithOnMainThread(t =>
             {
                 if (!t.IsFaulted)
@@ -537,13 +549,20 @@ public class GameManager : MonoBehaviour
                         Debug.Log($"[GameManager] No players left. Deleting room {roomId}");
                         dbRef.Child("rooms").Child(roomId).RemoveValueAsync();
                     }
+                    else
+                    {
+                        Debug.Log($"[GameManager] {t.Result.ChildrenCount} players remaining in room");
+                    }
                 }
 
+                // Reset local state
                 CurrentPlayers = new Dictionary<string, PlayerData>();
                 CurrentRoomId = null;
                 IsHost = false;
                 CurrentMode = GameMode.InMenu;
-                SceneManager.LoadScene("MenuScene");
+
+                Debug.Log("[GameManager] Returning to menu...");
+                UnityEngine.SceneManagement.SceneManager.LoadScene("MenuScene");
             });
         });
     }
