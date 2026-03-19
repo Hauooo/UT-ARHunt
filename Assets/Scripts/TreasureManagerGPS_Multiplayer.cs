@@ -378,15 +378,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // Add this user to the collectors
             collectedBy[myUserId] = true;
 
-            // ── NEW: If this is the last allowed collector, mark for deletion ──
-            // For now, treasures disappear after first collection
-            // If you want it to disappear after ALL players collect it, modify this logic
+            // Mark treasure as collected
             data["collectedBy"] = collectedBy;
-
-            // Mark treasure for deletion in the database (so it disappears for everyone)
             data["isCollected"] = true;
 
-            // ── NEW: write bonus points into the record ───────────────────────
             if (bonusPoints > 0)
                 data["bonusPoints"] = bonusPoints;
 
@@ -402,7 +397,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             {
                 if (abortedAlreadyCollected)
                 {
-                    LogToUI("You already collected this treasure!.");
+                    LogToUI("You already collected this treasure!");
                     if (collectButton != null)
                     {
                         collectButton.gameObject.SetActive(false);
@@ -427,17 +422,38 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 return;
             }
 
-            // Success — ChildChanged handler destroys it for everyone
-            // After transaction success, update player score
-            long earned = target.data.points + bonusPoints;
+            // ← SUCCESS: Treasure collected!
+            // Calculate total points earned (base points + bonus from challenge)
+            long totalEarned = target.data.points + bonusPoints;
+
+            // Update ScoreManager UI
+            if (ScoreManager.Instance != null)
+            {
+                ScoreManager.Instance.AddTreasurePoints();
+                LogToUI($"✅ Treasure collected! +{totalEarned} points");
+            }
+
+            // Also save to Firebase for persistence
             dbRef.Child("rooms").Child(currentRoomId)
                  .Child("scores").Child(myUserId)
                  .RunTransaction(scoreData =>
                  {
                      long current = scoreData.Value == null ? 0 : (long)scoreData.Value;
-                     scoreData.Value = current + earned;
+                     scoreData.Value = current + totalEarned;
                      return TransactionResult.Success(scoreData);
+                 }).ContinueWithOnMainThread(scoreTask =>
+                 {
+                     if (scoreTask.IsFaulted)
+                     {
+                         Debug.LogError("Failed to update score in Firebase: " + scoreTask.Exception);
+                     }
+                     else
+                     {
+                         Debug.Log($"[TreasureManager] Score updated: +{totalEarned} points. Total in Firebase.");
+                     }
                  });
+
+            Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected by {myUserId}");
         });
     }
 

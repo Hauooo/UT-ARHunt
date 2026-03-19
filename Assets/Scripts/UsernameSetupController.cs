@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using Firebase.Auth;
 using Firebase.Extensions;
+using System;
 
 public class UsernameSetupController : MonoBehaviour
 {
@@ -16,6 +17,7 @@ public class UsernameSetupController : MonoBehaviour
     [SerializeField] private int maxLength = 20;
 
     private bool isMandatory = false; // true on first app open if missing username
+    public event Action<string> OnUsernameSaved; // Optional event for other scripts to react to username changes
 
     private void Awake()
     {
@@ -77,9 +79,21 @@ public class UsernameSetupController : MonoBehaviour
             }
 
             SetFeedback("Saved!");
+            Debug.Log($"[UsernameSetup] Username updated to: {name}");
+
+            OnUsernameSaved?.Invoke(name);
+
             if (panelRoot != null) panelRoot.SetActive(false);
             isMandatory = false;
         });
+
+        //back to menu panel after saving.
+            var menuManager = FindObjectOfType<MenuManager>();
+            if (menuManager != null)
+            {
+                menuManager.ShowPanel(menuManager.mainMenuPanel);
+        }
+
     }
 
     private bool IsValid(string n)
