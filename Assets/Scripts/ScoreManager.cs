@@ -86,6 +86,8 @@ public class ScoreManager : MonoBehaviour
 
     /// <summary>
     /// Load score and time from Firebase asynchronously
+    /// Score: rooms/{roomId}/scores/{userId}
+    /// Time: rooms/{roomId}/players/{userId}/timeTakenSeconds
     /// </summary>
     private void LoadScoreAndTimeFromFirebase()
     {
@@ -119,48 +121,69 @@ public class ScoreManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[ScoreManager] Loading score and time from rooms/{roomId}/players/{user.UserId}");
+        Debug.Log($"[ScoreManager] Loading score from rooms/{roomId}/scores/{user.UserId}");
+        Debug.Log($"[ScoreManager] Loading time from rooms/{roomId}/players/{user.UserId}");
 
-        // Load from player data node which contains both score and time
+        // ← LOAD SCORE from scores node (not players node!)
         dbRef.Child("rooms").Child(roomId)
-             .Child("players").Child(user.UserId)
+             .Child("scores").Child(user.UserId)
              .GetValueAsync()
-             .ContinueWithOnMainThread(task =>
+             .ContinueWithOnMainThread(scoreTask =>
              {
-                 if (task.IsFaulted)
+                 if (scoreTask.IsFaulted)
                  {
-                     Debug.LogError("[ScoreManager] Failed to load data from Firebase: " + task.Exception);
-                     UpdateScoreboardUI();
-                     return;
+                     Debug.LogError("[ScoreManager] Failed to load score: " + scoreTask.Exception);
                  }
-
-                 if (task.IsCompleted && task.Result.Exists)
+                 else if (scoreTask.IsCompleted && scoreTask.Result.Exists)
                  {
-                     // Load score
-                     if (task.Result.HasChild("currentScore"))
+                     if (long.TryParse(scoreTask.Result.Value.ToString(), out long score))
                      {
-                         if (long.TryParse(task.Result.Child("currentScore").Value.ToString(), out long score))
-                         {
-                             currentScore = (int)score;
-                             Debug.Log($"[ScoreManager] ✓ Loaded score from Firebase: {currentScore}");
-                         }
-                     }
-
-                     // ← NEW: Load time taken
-                     if (task.Result.HasChild("timeTakenSeconds"))
-                     {
-                         if (long.TryParse(task.Result.Child("timeTakenSeconds").Value.ToString(), out long time))
-                         {
-                             secondsTaken = (int)time;
-                             Debug.Log($"[ScoreManager] ✓ Loaded time from Firebase: {secondsTaken}s");
-                         }
+                         currentScore = (int)score;
+                         Debug.Log($"[ScoreManager] ✓ Loaded score from Firebase: {currentScore}");
                      }
                  }
                  else
                  {
-                     Debug.Log("[ScoreManager] No data found in Firebase. Using defaults.");
+                     Debug.Log("[ScoreManager] No score found in Firebase. Using default: 0");
                  }
 
+                 // After loading score, load time
+                 LoadTimeFromFirebase(user.UserId, roomId);
+             });
+    }
+
+    /// <summary>
+    /// Load time taken from Firebase
+    /// </summary>
+    private void LoadTimeFromFirebase(string userId, string roomId)
+    {
+        if (dbRef == null) return;
+
+        // ← LOAD TIME from players node
+        dbRef.Child("rooms").Child(roomId)
+             .Child("players").Child(userId)
+             .Child("timeTakenSeconds")
+             .GetValueAsync()
+             .ContinueWithOnMainThread(timeTask =>
+             {
+                 if (timeTask.IsFaulted)
+                 {
+                     Debug.LogError("[ScoreManager] Failed to load time: " + timeTask.Exception);
+                 }
+                 else if (timeTask.IsCompleted && timeTask.Result.Exists)
+                 {
+                     if (long.TryParse(timeTask.Result.Value.ToString(), out long time))
+                     {
+                         secondsTaken = (int)time;
+                         Debug.Log($"[ScoreManager] ✓ Loaded time from Firebase: {secondsTaken}s");
+                     }
+                 }
+                 else
+                 {
+                     Debug.Log("[ScoreManager] No time found in Firebase. Using default: 0");
+                 }
+
+                 // Now update UI with both score and time
                  UpdateScoreboardUI();
              });
     }

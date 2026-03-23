@@ -51,6 +51,7 @@ public class GameManager : MonoBehaviour
 
     private string lastFirebaseInitError = null;
     private string lastFirebaseInitState = "Not started";
+    private bool isShowingScoreboard = false;
 
     #region --- Unity Methods ---
 
@@ -434,8 +435,17 @@ public class GameManager : MonoBehaviour
         OnPlayerListUpdated?.Invoke(playersDict);
     }
 
+
+
     private void HandleStatusChanged(object sender, ValueChangedEventArgs args)
     {
+        // ← NEW: Check scoreboard flag FIRST, before any other logic
+        if (isShowingScoreboard)
+        {
+            Debug.Log("[GameManager] Scoreboard is showing - ignoring room status changes");
+            return;
+        }
+
         if (!args.Snapshot.Exists)
         {
             Debug.LogWarning("[GameManager] Room status node missing (room deleted). Returning to menu.");
@@ -445,23 +455,26 @@ public class GameManager : MonoBehaviour
 
         string status = args.Snapshot.Value?.ToString();
 
-        // ✅ NEW: end-game signal for everyone
+        // ✅ End-game signal for everyone
         if (status == "ended")
         {
             Debug.Log("[GameManager] Room ended. Loading Scoreboard scene.");
+            isShowingScoreboard = true;  // ← SET FLAG before loading scene
+
             StopListeningToRoomUpdates();
-            SceneManager.LoadScene(scoreboardSceneName);;
+            SceneManager.LoadScene(scoreboardSceneName);
             return;
         }
 
         if (status == "in-progress")
         {
-            Debug.Log("Game is starting! Loading AR Scene.");
+            Debug.Log("[GameManager] Game is starting! Loading AR Scene.");
             CurrentMode = GameMode.PlayingInRoom;
 
             OnGameStarting?.Invoke();
             StopListeningToRoomUpdates();
             SceneManager.LoadScene(arSceneName);
+            return;
         }
     }
 
@@ -514,6 +527,8 @@ public class GameManager : MonoBehaviour
 
     public void LeaveScoreboard()
     {
+        isShowingScoreboard = false;  // ← RESET flag when leaving
+
         if (string.IsNullOrEmpty(CurrentRoomId))
         {
             ReturnToMenu();
@@ -538,7 +553,7 @@ public class GameManager : MonoBehaviour
         {
             Debug.Log("[GameManager] Player removed from room");
 
-            // 2) Check if any players remain
+            // 2) Check remaining players
             playersRef.GetValueAsync().ContinueWithOnMainThread(t =>
             {
                 if (!t.IsFaulted)
@@ -551,7 +566,7 @@ public class GameManager : MonoBehaviour
                     }
                     else
                     {
-                        Debug.Log($"[GameManager] {t.Result.ChildrenCount} players remaining in room");
+                        Debug.Log($"[GameManager] {t.Result.ChildrenCount} players still in room");
                     }
                 }
 
@@ -561,8 +576,8 @@ public class GameManager : MonoBehaviour
                 IsHost = false;
                 CurrentMode = GameMode.InMenu;
 
-                Debug.Log("[GameManager] Returning to menu...");
-                UnityEngine.SceneManagement.SceneManager.LoadScene("MenuScene");
+                Debug.Log("[GameManager] Returning to Main Menu...");
+                SceneManager.LoadScene("MenuScene");
             });
         });
     }

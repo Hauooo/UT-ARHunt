@@ -52,6 +52,12 @@ public class UsernameSetupController : MonoBehaviour
     {
         if (isMandatory) return;
         if (panelRoot != null) panelRoot.SetActive(false);
+
+        var menuManager = FindObjectOfType<MenuManager>();
+        if (menuManager != null)
+        {
+            menuManager.ShowPanel(menuManager.mainMenuPanel);
+        };
     }
 
     private void OnSaveClicked()
