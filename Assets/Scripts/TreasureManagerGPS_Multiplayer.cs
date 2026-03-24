@@ -23,6 +23,18 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         // Note: JsonUtility doesn't serialize Dictionary well, but Firebase will create this map once a player collects.
         public Dictionary<string, bool> collectedBy = new Dictionary<string, bool>();
         public ChallengeData challenge; // Optional: add challenge data here for future extension
+
+        // Constructor for creating new treasures
+        public TreasureData() { }
+
+        public TreasureData(string name, double lat, double lon, long points)
+        {
+            this.name = name;
+            this.lat = lat;
+            this.lon = lon;
+            this.points = points;
+            this.collectedBy = new Dictionary<string, bool>();
+        }
     }
 
     // Local runtime treasure state
@@ -102,6 +114,27 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         }
 
         UpdateUIElements();
+    }
+
+    /// <summary>
+    /// Get all treasures in the current set for uploading
+    /// </summary>
+    public List<TreasureData> GetAllTreasures()
+    {
+        if (localTreasures == null || localTreasures.Count == 0)
+        {
+            Debug.LogWarning("[TreasureManager] No treasures loaded");
+            return new List<TreasureData>();
+        }
+
+        List<TreasureData> treasuresList = new List<TreasureData>();
+        foreach (var treasure in localTreasures.Values)
+        {
+            treasuresList.Add(treasure.data);
+        }
+
+        Debug.Log($"[TreasureManager] Returning {treasuresList.Count} treasures for upload");
+        return treasuresList;
     }
 
     /// <summary>
@@ -434,7 +467,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // Update ScoreManager UI
             if (ScoreManager.Instance != null)
             {
-                
+                ScoreManager.Instance.AddTreasurePoints();
+
                 int currentScore = ScoreManager.Instance.GetScore();
 
                 // Save to Firebase
@@ -670,8 +704,6 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         return new Vector3((float)x, 0, (float)z);
     }
-
-
 
     private void LogToUI(string msg)
     {

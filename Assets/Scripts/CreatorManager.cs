@@ -6,16 +6,17 @@ using Firebase.Extensions;
 using System.Collections;
 using System.Collections.Generic;
 using System;
+using Firebase.Auth;
 
 /// <summary>
 /// Controls the redesigned CreatorScene:
 /// - Shows OSM map centred on user's GPS location
-/// - Top-right buttons: New, Edit, Delete
-/// - Each button opens a modal panel for the respective CRUD operation
+/// - Top-right buttons: New, Edit, Delete, Upload
+/// - Each button opens a modal panel for the respective operation
 /// </summary>
 public class CreatorMapController : MonoBehaviour
 {
-    // ── Map ───────────────���─────────────���─────────────────────────────────
+    // ── Map ───────────────────────────────────────────────────────────────
     [Header("Map")]
     [SerializeField] private OSMTileLoader tileLoader;
     [SerializeField] private RectTransform mapContainer;
@@ -33,6 +34,7 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private Button newButton;
     [SerializeField] private Button editButton;
     [SerializeField] private Button deleteButton;
+    [SerializeField] private Button uploadButton;  // ← MOVED HERE
     [SerializeField] private Button backButton;
 
     // ── New Set Panel ─────────────────────────────────────────────────────
@@ -62,6 +64,16 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private Button confirmDeleteButton;
     [SerializeField] private Button deleteCancelButton;
 
+    // ── Upload Panel ──────────────────────────────────────────────────────
+    [Header("Upload Panel")]
+    [SerializeField] private GameObject uploadPanelRoot;
+    [SerializeField] private TMP_InputField levelNameInput;
+    [SerializeField] private TMP_InputField levelDescriptionInput;
+    [SerializeField] private Button uploadConfirmButton;
+    [SerializeField] private Button uploadCancelButton;
+    [SerializeField] private TMP_Text uploadFeedbackText;
+    [SerializeField] private Scrollbar uploadProgressBar;
+
     // ── Challenge Panel ───────────────────────────────────────────────────
     [Header("Challenge Config")]
     [SerializeField] private ChallengeConfigController challengeConfig;
@@ -81,6 +93,7 @@ public class CreatorMapController : MonoBehaviour
     private string editingSetId = null;
 
     // ─────────────────────────────────────────────────────────────────────
+
     #region Unity Lifecycle
 
     private void Start()
@@ -101,10 +114,30 @@ public class CreatorMapController : MonoBehaviour
             Debug.LogError("[CreatorMapController] Firebase init failed: " + ex.Message);
         }
 
+        // Wire existing buttons
         newButton.onClick.AddListener(OnNewClicked);
         editButton.onClick.AddListener(OnEditClicked);
         deleteButton.onClick.AddListener(OnDeleteClicked);
         backButton.onClick.AddListener(() => gameManager.ReturnToMenu());
+
+        // Wire upload buttons
+        if (uploadButton != null)
+        {
+            uploadButton.onClick.RemoveAllListeners();
+            uploadButton.onClick.AddListener(OnUploadLevelClicked);
+        }
+
+        if (uploadConfirmButton != null)
+        {
+            uploadConfirmButton.onClick.RemoveAllListeners();
+            uploadConfirmButton.onClick.AddListener(UploadSetAsLevel);
+        }
+
+        if (uploadCancelButton != null)
+        {
+            uploadCancelButton.onClick.RemoveAllListeners();
+            uploadCancelButton.onClick.AddListener(CloseUploadPanel);
+        }
 
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
         newSaveButton.onClick.AddListener(SaveNewSet);
@@ -126,6 +159,14 @@ public class CreatorMapController : MonoBehaviour
     {
         if (gpsReady && playerMarker != null)
             playerMarker.anchoredPosition = Vector2.zero;
+    }
+
+    private void OnDestroy()
+    {
+        if (locationManager != null)
+            locationManager.OnLocationUpdated -= OnLocationUpdated;
+
+        CancelInvoke(nameof(CloseUploadPanel));
     }
 
     #endregion
@@ -156,12 +197,6 @@ public class CreatorMapController : MonoBehaviour
     {
         tileLoader.CenterMapOn(lat, lon);
         RefreshAllPinsOnMap();
-    }
-
-    private void OnDestroy()
-    {
-        if (locationManager != null)
-            locationManager.OnLocationUpdated -= OnLocationUpdated;
     }
 
     #endregion
@@ -246,6 +281,7 @@ public class CreatorMapController : MonoBehaviour
         newSetPanel.SetActive(true);
         editSetPanel.SetActive(false);
         deleteSetPanel.SetActive(false);
+        uploadPanelRoot.SetActive(false);
     }
 
     private void SaveNewSet()
@@ -302,15 +338,14 @@ public class CreatorMapController : MonoBehaviour
         foreach (var set in loadedSets.Values) options.Add(set.setName);
         editSetDropdown.AddOptions(options);
 
-        // ── FIX: do NOT clear workingPins/preview here — LoadSetIntoEditPanel handles it ──
         editSetDropdown.onValueChanged.RemoveAllListeners();
         editSetDropdown.onValueChanged.AddListener(idx => LoadSetIntoEditPanel(GetSetByDropdownIndex(idx)));
 
         editSetPanel.SetActive(true);
         newSetPanel.SetActive(false);
         deleteSetPanel.SetActive(false);
+        uploadPanelRoot.SetActive(false);
 
-        // Load first set — must happen AFTER panel is active so layout is correct
         LoadSetIntoEditPanel(GetSetByDropdownIndex(0));
     }
 
@@ -321,13 +356,11 @@ public class CreatorMapController : MonoBehaviour
         editingSetId = set.setId;
         editSetNameInput.text = set.setName;
 
-        // Replace workingPins with the set's existing treasures
         workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(set.treasures);
         ClearPreviewPins();
-        RedrawPreviewPins();      // spawns yellow, tappable preview pins for all existing treasures
-        UpdateEditPinCountText(); // ← shows correct count immediately
+        RedrawPreviewPins();
+        UpdateEditPinCountText();
 
-        // Remove the static map pins for this set so only yellow preview pins are visible
         if (setMapPins.ContainsKey(set.setId))
         {
             foreach (var p in setMapPins[set.setId]) Destroy(p);
@@ -336,7 +369,6 @@ public class CreatorMapController : MonoBehaviour
 
         SetStatus($"Editing '{set.setName}'. Tap a pin to set its challenge, or place new pins.");
 
-        // ── Auto-open challenge config for the first pin when editing ──
         if (workingPins.Count > 0 && challengeConfig != null)
             challengeConfig.Show(0, workingPins[0].challenge, OnChallengeSaved);
     }
@@ -406,6 +438,7 @@ public class CreatorMapController : MonoBehaviour
         deleteSetPanel.SetActive(true);
         newSetPanel.SetActive(false);
         editSetPanel.SetActive(false);
+        uploadPanelRoot.SetActive(false);
     }
 
     private void UpdateDeleteConfirmText(TreasureSetData set)
@@ -444,6 +477,191 @@ public class CreatorMapController : MonoBehaviour
     #endregion
 
     // ─────────────────────────────────────────────────────────────────────
+    #region UPLOAD — Upload Set as Level
+
+    private void OnUploadLevelClicked()
+    {
+        var selectedSet = GetCurrentlySelectedSet();
+
+        if (selectedSet == null || selectedSet.treasures.Count == 0)
+        {
+            SetStatus("Select or create a set with treasures to upload.");
+            return;
+        }
+
+        if (uploadPanelRoot != null)
+        {
+            uploadPanelRoot.SetActive(true);
+            levelNameInput.text = selectedSet.setName;
+            levelDescriptionInput.text = "";
+        }
+
+        newSetPanel.SetActive(false);
+        editSetPanel.SetActive(false);
+        deleteSetPanel.SetActive(false);
+
+        Debug.Log($"[CreatorMapController] Opening upload panel for set: {selectedSet.setName}");
+    }
+
+    private TreasureSetData GetCurrentlySelectedSet()
+    {
+        if (!string.IsNullOrEmpty(editingSetId) && loadedSets.ContainsKey(editingSetId))
+        {
+            return loadedSets[editingSetId];
+        }
+
+        if (workingPins.Count > 0)
+        {
+            return new TreasureSetData
+            {
+                setName = newSetNameInput?.text ?? "Unnamed Set",
+                treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
+            };
+        }
+
+        return null;
+    }
+
+    public void UploadSetAsLevel()
+    {
+        string levelName = levelNameInput?.text?.Trim() ?? "";
+        string description = levelDescriptionInput?.text?.Trim() ?? "";
+
+        if (string.IsNullOrEmpty(levelName))
+        {
+            ShowUploadFeedback("Enter a level name.");
+            return;
+        }
+
+        var selectedSet = GetCurrentlySelectedSet();
+        if (selectedSet == null || selectedSet.treasures.Count == 0)
+        {
+            ShowUploadFeedback("No treasures to upload.");
+            return;
+        }
+
+        if (uploadConfirmButton != null)
+            uploadConfirmButton.interactable = false;
+
+        ShowUploadFeedback("Uploading level...");
+        UploadLevelToFirebase(levelName, description, selectedSet.treasures);
+    }
+
+    private void UploadLevelToFirebase(string levelName, string description, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
+    {
+        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+        if (user == null)
+        {
+            ShowUploadFeedback("Not signed in.");
+            if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+            return;
+        }
+
+        string levelId = dbRef.Child("levels").Push().Key;
+
+        var levelData = new Dictionary<string, object>
+        {
+            { "levelId", levelId },
+            { "name", levelName },
+            { "description", description },
+            { "createdBy", user.UserId },
+            { "creatorName", user.DisplayName ?? "Anonymous" },
+            { "createdAt", ServerValue.Timestamp },
+            { "treasureCount", treasures.Count },
+            { "plays", 0 },
+            { "rating", 0 },
+            { "difficulty", "Medium" }
+        };
+
+        dbRef.Child("levels").Child(levelId)
+             .SetValueAsync(levelData)
+             .ContinueWithOnMainThread(task =>
+             {
+                 if (task.IsFaulted || task.IsCanceled)
+                 {
+                     ShowUploadFeedback("Failed to upload level.");
+                     Debug.LogError("[CreatorMapController] Upload failed: " + task.Exception);
+                     if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                     return;
+                 }
+
+                 Debug.Log($"[CreatorMapController] Level metadata uploaded: {levelId}");
+                 UploadTreasuresToLevel(levelId, treasures);
+             });
+    }
+
+    private void UploadTreasuresToLevel(string levelId, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
+    {
+        int uploadedCount = 0;
+        int totalCount = treasures.Count;
+
+        Debug.Log($"[CreatorMapController] Starting to upload {totalCount} treasures");
+
+        foreach (var treasure in treasures)
+        {
+            string treasureId = dbRef.Child("levels").Child(levelId).Child("treasures").Push().Key;
+
+            var treasureData = new Dictionary<string, object>
+            {
+                { "name", treasure.name },
+                { "lat", treasure.lat },
+                { "lon", treasure.lon },
+                { "points", treasure.points }
+            };
+
+            dbRef.Child("levels").Child(levelId)
+                 .Child("treasures").Child(treasureId)
+                 .SetValueAsync(treasureData)
+                 .ContinueWithOnMainThread(task =>
+                 {
+                     uploadedCount++;
+
+                     if (task.IsFaulted)
+                     {
+                         Debug.LogError("[CreatorMapController] Treasure upload failed: " + task.Exception);
+                     }
+                     else
+                     {
+                         Debug.Log($"[CreatorMapController] Uploaded treasure {uploadedCount}/{totalCount}");
+                     }
+
+                     if (uploadProgressBar != null)
+                         uploadProgressBar.value = (float)uploadedCount / totalCount;
+
+                     if (uploadedCount >= totalCount)
+                     {
+                         ShowUploadFeedback($"Level '{levelNameInput.text}' uploaded successfully!");
+                         Debug.Log($"[CreatorMapController] All treasures uploaded for level: {levelId}");
+
+                         Invoke(nameof(CloseUploadPanel), 2f);
+                         if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                     }
+                 });
+        }
+    }
+
+    private void CloseUploadPanel()
+    {
+        if (uploadPanelRoot != null)
+            uploadPanelRoot.SetActive(false);
+
+        levelNameInput.text = "";
+        levelDescriptionInput.text = "";
+
+        Debug.Log("[CreatorMapController] Upload panel closed");
+    }
+
+    private void ShowUploadFeedback(string message)
+    {
+        if (uploadFeedbackText != null)
+            uploadFeedbackText.text = message;
+
+        Debug.Log("[CreatorMapController] " + message);
+    }
+
+    #endregion
+
+    // ─────────────────────────────────────────────────────────────────────
     #region Shared Pin Placement (New & Edit)
 
     private void PlacePinAtCurrentLocation()
@@ -461,11 +679,9 @@ public class CreatorMapController : MonoBehaviour
         workingPins.Add(newPin);
         SpawnPreviewPin(newPin);
 
-        // Update the correct panel's counter immediately
         UpdateNewPinCountText();
         UpdateEditPinCountText();
 
-        // ── Auto-open challenge config for the newly placed pin ──
         int newPinIndex = workingPins.Count - 1;
         if (challengeConfig != null)
             challengeConfig.Show(newPinIndex, workingPins[newPinIndex].challenge, OnChallengeSaved);
@@ -521,11 +737,10 @@ public class CreatorMapController : MonoBehaviour
         newSetPanel.SetActive(false);
         editSetPanel.SetActive(false);
         deleteSetPanel.SetActive(false);
+        uploadPanelRoot.SetActive(false);
         workingPins.Clear();
         ClearPreviewPins();
         editingSetId = null;
-        if (editingSetId != null && loadedSets.ContainsKey(editingSetId))
-            SpawnPinsForSet(loadedSets[editingSetId]);
     }
 
     private void SetStatus(string msg)
@@ -571,8 +786,6 @@ public class CreatorMapController : MonoBehaviour
         editPinCountText.text = $"Pins placed: {workingPins.Count}";
     }
 
-    
-
     private TreasureSetData GetSetByDropdownIndex(int index)
     {
         int i = 0;
@@ -584,7 +797,6 @@ public class CreatorMapController : MonoBehaviour
         return null;
     }
 
-    // ── Callback from ChallengeConfigController ───────────────────────────
     private void OnChallengeSaved(int pinIndex, ChallengeData challengeData)
     {
         if (pinIndex < 0 || pinIndex >= workingPins.Count) return;
@@ -594,7 +806,6 @@ public class CreatorMapController : MonoBehaviour
         if (pinIndex < previewPinObjects.Count)
             UpdatePinBadge(previewPinObjects[pinIndex], challengeData);
 
-        // Refresh pin count text now that the challenge panel has closed
         UpdateNewPinCountText();
         UpdateEditPinCountText();
 

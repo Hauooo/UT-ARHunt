@@ -1,20 +1,24 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 public class MenuManager : MonoBehaviour
 {
     [Header("Panels")]
     public GameObject mainMenuPanel;
-
-    // NEW panels
     public GameObject playerPanel;
     public GameObject creatorPanel;
     public GameObject usernamePanel;
+    public GameObject levelBrowserPanel;    // ← NEW
+    public GameObject levelUploadPanel;     // ← NEW
 
-    // Existing panels (keep if still used elsewhere)
     public GameObject joinRoomPanel;
     public GameObject createRoomPanel;
     public GameObject hostLobbyPanel;
     public GameObject roomLobbyPanel;
+
+    [Header("Managers")]
+    [SerializeField] private LevelBrowserManager levelBrowserManager;  // ← NEW
+    [SerializeField] private LevelUploadManager levelUploadManager;    // ← NEW
+    [SerializeField] private LevelSetSelector levelSetSelector;      // ← NEW
 
     [HideInInspector] public GameObject activePanel;
 
@@ -58,31 +62,60 @@ public class MenuManager : MonoBehaviour
         activePanel.SetActive(true);
     }
 
-    // MAIN MENU BUTTONS
+    // ==================== MAIN MENU ====================
     public void OnPlayButton() => ShowPanel(playerPanel);
     public void OnCreatorButton() => ShowPanel(creatorPanel);
-
-    // COMMON
     public void OnBackButton() => ShowPanel(mainMenuPanel);
+    public void OnChangeUsernameButton() => ShowPanel(usernamePanel);
 
-    // OPTIONAL: if playerPanel still has these buttons
+    // ==================== PLAYER SECTION ====================
+    public void OnHostGameButton() => ShowPanel(createRoomPanel);
+
+    public void OnBrowseLevelsButton()
+    {
+        ShowPanel(levelBrowserPanel);
+        if (levelBrowserManager != null)
+        {
+            levelBrowserManager.OpenBrowser();
+            Debug.Log("[MenuManager] Opened level browser");
+        }
+    }
+
+    // ==================== CREATOR SECTION ====================
+    public void OnUploadLevelButton()
+    {
+        if (levelSetSelector != null)
+        {
+            levelSetSelector.OpenSelector();
+            Debug.Log("[MenuManager] Opened level set selector");
+        }
+        else
+        {
+            Debug.LogError("[MenuManager] LevelSetSelector not found");
+        }
+    }
+
+    public void OnCreateButton()
+    {
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.StartCreatorMode();
+        }
+    }
+
+    // ==================== ROOM BUTTONS ====================
     public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
     public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
 
-    public void OnCreateButton() => GameManager.Instance.StartCreatorMode();
-
-    //change username
-    public void OnChangeUsernameButton() => ShowPanel(usernamePanel);
-
     private void HandleLobbyReady(string roomId, bool isHost)
     {
-        Debug.Log($"Lobby ready! Room ID: {roomId} isHost={isHost}");
+        Debug.Log($"[MenuManager] Lobby ready! Room ID: {roomId} isHost={isHost}");
         ShowPanel(roomLobbyPanel);
     }
 
     private void HandleJoinFailed(string reason)
     {
-        Debug.LogWarning($"Join failed: {reason}");
+        Debug.LogWarning($"[MenuManager] Join failed: {reason}");
         ShowPanel(playerPanel != null ? playerPanel : mainMenuPanel);
     }
 }
