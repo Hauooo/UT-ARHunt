@@ -28,13 +28,14 @@ public class CreatorMapController : MonoBehaviour
     // ── Status ────────────────────────────────────────────────────────────
     [Header("Status")]
     [SerializeField] private TMP_Text statusText;
+    [SerializeField] private TMP_Dropdown setSelectionDropdown;
 
     // ── Top-Right Buttons ─────────────────────────────────────────────────
     [Header("Top Right Buttons")]
     [SerializeField] private Button newButton;
     [SerializeField] private Button editButton;
     [SerializeField] private Button deleteButton;
-    [SerializeField] private Button uploadButton;  // ← MOVED HERE
+    [SerializeField] private Button uploadButton;
     [SerializeField] private Button backButton;
 
     // ── New Set Panel ─────────────────────────────────────────────────────
@@ -139,6 +140,12 @@ public class CreatorMapController : MonoBehaviour
             uploadCancelButton.onClick.AddListener(CloseUploadPanel);
         }
 
+        if (setSelectionDropdown != null)
+        {
+            setSelectionDropdown.onValueChanged.RemoveAllListeners();
+            setSelectionDropdown.onValueChanged.AddListener(OnSetSelected);
+        }
+
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
         newSaveButton.onClick.AddListener(SaveNewSet);
         newCancelButton.onClick.AddListener(CloseAllPanels);
@@ -228,6 +235,9 @@ public class CreatorMapController : MonoBehaviour
                     loadedSets[set.setId] = set;
                     SpawnPinsForSet(set);
                 }
+
+                // ← Setup dropdown after loading sets
+                SetupSetSelectionDropdown();
 
                 SetStatus(loadedSets.Count == 0
                     ? "No sets yet. Tap [New] to create one."
@@ -505,11 +515,13 @@ public class CreatorMapController : MonoBehaviour
 
     private TreasureSetData GetCurrentlySelectedSet()
     {
+        // Priority 1: Currently editing a set
         if (!string.IsNullOrEmpty(editingSetId) && loadedSets.ContainsKey(editingSetId))
         {
             return loadedSets[editingSetId];
         }
 
+        // Priority 2: Currently creating new treasures
         if (workingPins.Count > 0)
         {
             return new TreasureSetData
@@ -517,6 +529,14 @@ public class CreatorMapController : MonoBehaviour
                 setName = newSetNameInput?.text ?? "Unnamed Set",
                 treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
             };
+        }
+
+        // Priority 3: Get set from dropdown selection
+        if (setSelectionDropdown != null && loadedSets.Count > 0)
+        {
+            var selectedSet = GetSetByDropdownIndex(setSelectionDropdown.value);
+            if (selectedSet != null)
+                return selectedSet;
         }
 
         return null;
@@ -560,18 +580,18 @@ public class CreatorMapController : MonoBehaviour
         string levelId = dbRef.Child("levels").Push().Key;
 
         var levelData = new Dictionary<string, object>
-        {
-            { "levelId", levelId },
-            { "name", levelName },
-            { "description", description },
-            { "createdBy", user.UserId },
-            { "creatorName", user.DisplayName ?? "Anonymous" },
-            { "createdAt", ServerValue.Timestamp },
-            { "treasureCount", treasures.Count },
-            { "plays", 0 },
-            { "rating", 0 },
-            { "difficulty", "Medium" }
-        };
+    {
+        { "levelId", levelId },
+        { "name", levelName },
+        { "description", description },
+        { "createdBy", user.UserId },
+        { "creatorName", user.DisplayName ?? "Anonymous" },
+        { "createdAt", ServerValue.Timestamp },
+        { "treasureCount", treasures.Count },
+        { "plays", 0 },
+        { "rating", 0 },
+        { "difficulty", "Medium" }
+    };
 
         dbRef.Child("levels").Child(levelId)
              .SetValueAsync(levelData)
@@ -594,20 +614,57 @@ public class CreatorMapController : MonoBehaviour
     {
         int uploadedCount = 0;
         int totalCount = treasures.Count;
+        int treasureIndex = 0;
 
         Debug.Log($"[CreatorMapController] Starting to upload {totalCount} treasures");
 
         foreach (var treasure in treasures)
         {
-            string treasureId = dbRef.Child("levels").Child(levelId).Child("treasures").Push().Key;
+            string treasureId = $"treasure_{treasureIndex}";
 
             var treasureData = new Dictionary<string, object>
+        {
+            { "name", treasure.name },
+            { "lat", treasure.lat },
+            { "lon", treasure.lon },
+            { "points", treasure.points }
+        };
+
+            // ← ADD THIS: Include challenge if it exists
+            if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
             {
-                { "name", treasure.name },
-                { "lat", treasure.lat },
-                { "lon", treasure.lon },
-                { "points", treasure.points }
+                var challengeData = new Dictionary<string, object>
+            {
+                { "type", (int)treasure.challenge.type },
+                { "bonusPoints", treasure.challenge.bonusPoints },
+                { "maxAttempts", treasure.challenge.maxAttempts },
+                { "timeLimitSeconds", treasure.challenge.timeLimitSeconds },
+                { "minigameId", treasure.challenge.minigameId ?? "" }
             };
+
+                // Add MCQ-specific fields
+                if (treasure.challenge.type == ChallengeType.MCQ)
+                {
+                    challengeData["question"] = treasure.challenge.question ?? "";
+
+                    var optionsData = new List<object>();
+                    if (treasure.challenge.options != null)
+                    {
+                        foreach (var option in treasure.challenge.options)
+                        {
+                            optionsData.Add(new Dictionary<string, object>
+                        {
+                            { "text", option.text },
+                            { "isCorrect", option.isCorrect }
+                        });
+                        }
+                    }
+                    challengeData["options"] = optionsData;
+                }
+
+                treasureData["challenge"] = challengeData;
+                Debug.Log($"[CreatorMapController] Added challenge to treasure: {treasure.name} (type: {treasure.challenge.type})");
+            }
 
             dbRef.Child("levels").Child(levelId)
                  .Child("treasures").Child(treasureId)
@@ -637,6 +694,8 @@ public class CreatorMapController : MonoBehaviour
                          if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
                      }
                  });
+
+            treasureIndex++;
         }
     }
 
@@ -660,6 +719,68 @@ public class CreatorMapController : MonoBehaviour
     }
 
     #endregion
+
+    // ─────────────────────────────────────────────────────────────────────
+    #region SET SELECTION — Dropdown for choosing sets
+
+    /// <summary>
+    /// Setup the set selection dropdown with all loaded sets
+    /// </summary>
+    private void SetupSetSelectionDropdown()
+    {
+        if (setSelectionDropdown == null) return;
+
+        setSelectionDropdown.ClearOptions();
+        var options = new List<string>();
+
+        foreach (var set in loadedSets.Values)
+        {
+            options.Add($"{set.setName} ({set.treasures.Count} treasures)");
+        }
+
+        if (options.Count == 0)
+        {
+            setSelectionDropdown.AddOptions(new List<string> { "No sets available" });
+            setSelectionDropdown.interactable = false;
+            return;
+        }
+
+        setSelectionDropdown.AddOptions(options);
+        setSelectionDropdown.interactable = true;
+
+        // Load first set by default
+        OnSetSelected(0);
+
+        Debug.Log($"[CreatorMapController] Setup dropdown with {options.Count} sets");
+    }
+
+    private void OnSetSelected(int index)
+    {
+        var selectedSet = GetSetByDropdownIndex(index);
+        if (selectedSet == null) return;
+
+        // Load the selected set into edit mode
+        editingSetId = selectedSet.setId;
+        editSetNameInput.text = selectedSet.setName;
+
+        workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(selectedSet.treasures);
+        ClearPreviewPins();
+        RedrawPreviewPins();
+        UpdateEditPinCountText();
+
+        // Hide static map pins for this set
+        if (setMapPins.ContainsKey(selectedSet.setId))
+        {
+            foreach (var p in setMapPins[selectedSet.setId]) Destroy(p);
+            setMapPins.Remove(selectedSet.setId);
+        }
+
+        SetStatus($"Selected '{selectedSet.setName}' ({selectedSet.treasures.Count} treasures)");
+        Debug.Log($"[CreatorMapController] Set selected from dropdown: {selectedSet.setName}");
+    }
+
+    #endregion
+
 
     // ─────────────────────────────────────────────────────────────────────
     #region Shared Pin Placement (New & Edit)

@@ -12,8 +12,8 @@ public class LevelBrowserManager : MonoBehaviour
 {
     [Header("UI References")]
     [SerializeField] private GameObject levelBrowserPanel;
-    [SerializeField] private Transform levelListContent;
-    [SerializeField] private GameObject levelItemPrefab;
+    [SerializeField] private Transform levelListContent;  // ← The parent transform where items go
+    [SerializeField] private GameObject levelItemPrefab;  // ← The prefab to instantiate
     [SerializeField] private Button refreshButton;
     [SerializeField] private TMP_Text feedbackText;
     [SerializeField] private Button backButton;
@@ -46,9 +46,6 @@ public class LevelBrowserManager : MonoBehaviour
         InitializeFirebaseWithDelay();
     }
 
-    /// <summary>
-    /// Initialize Firebase after a small delay to ensure dependencies are ready
-    /// </summary>
     private void InitializeFirebaseWithDelay()
     {
         Invoke(nameof(InitializeFirebase), 0.5f);
@@ -91,7 +88,6 @@ public class LevelBrowserManager : MonoBehaviour
         if (levelBrowserPanel != null)
             levelBrowserPanel.SetActive(true);
 
-        // Check if Firebase is ready before loading
         if (!isFirebaseReady)
         {
             Debug.LogWarning("[LevelBrowser] Firebase not ready yet. Waiting...");
@@ -125,7 +121,10 @@ public class LevelBrowserManager : MonoBehaviour
 
         // Clear old list
         foreach (Transform child in levelListContent)
+        {
+            Debug.Log($"[LevelBrowser] Destroying old item: {child.name}");
             Destroy(child.gameObject);
+        }
 
         availableLevels.Clear();
 
@@ -191,6 +190,7 @@ public class LevelBrowserManager : MonoBehaviour
                 difficulty = snapshot.HasChild("difficulty") ? snapshot.Child("difficulty").Value?.ToString() ?? "Medium" : "Medium"
             };
 
+            Debug.Log($"[LevelBrowser] Parsed level: {level.name} (id: {level.levelId})");
             return level;
         }
         catch (System.Exception ex)
@@ -214,13 +214,19 @@ public class LevelBrowserManager : MonoBehaviour
             return;
         }
 
+        Debug.Log($"[LevelBrowser] Creating item for level: {levelData.name}");
+        Debug.Log($"[LevelBrowser] Parent transform: {levelListContent.name}, Child count before: {levelListContent.childCount}");
+
         GameObject itemObj = Instantiate(levelItemPrefab, levelListContent);
+
+        Debug.Log($"[LevelBrowser] Instantiated item, Child count after: {levelListContent.childCount}");
+
         LevelBrowserItem itemController = itemObj.GetComponent<LevelBrowserItem>();
 
         if (itemController != null)
         {
             itemController.Setup(levelData, OnPlayLevelClicked);
-            Debug.Log($"[LevelBrowser] Created UI item for level: {levelData.name}");
+            Debug.Log($"[LevelBrowser] Setup item controller for level: {levelData.name}");
         }
         else
         {
@@ -236,7 +242,6 @@ public class LevelBrowserManager : MonoBehaviour
         {
             var levelData = availableLevels[levelId];
 
-            // Save levelId to PlayerPrefs for the game to load
             PlayerPrefs.SetString("SelectedLevelId", levelId);
             PlayerPrefs.SetString("SelectedLevelName", levelData.name);
             PlayerPrefs.Save();
@@ -244,13 +249,131 @@ public class LevelBrowserManager : MonoBehaviour
             ShowFeedback($"Loading '{levelData.name}'...");
             Debug.Log($"[LevelBrowser] Level selected: {levelData.name}. Saved to PlayerPrefs.");
 
-            // TODO: Load game scene with this level
-            // SceneManager.LoadScene("ARScene");
+            // ← NEW: Load treasures and start the game
+            StartCoroutine(LoadLevelTreasuresAndStart(levelId, levelData.name));
         }
         else
         {
             ShowFeedback("Error: Level not found");
             Debug.LogError("[LevelBrowser] Level not found in dictionary");
+        }
+    }
+
+    private System.Collections.IEnumerator LoadLevelTreasuresAndStart(string levelId, string levelName)
+    {
+        yield return new WaitForSeconds(1f);
+
+        // Load treasures from Firebase
+        dbRef.Child("levels").Child(levelId).Child("treasures")
+             .GetValueAsync()
+             .ContinueWithOnMainThread(task =>
+             {
+                 if (task.IsFaulted)
+                 {
+                     ShowFeedback("Failed to load level treasures.");
+                     Debug.LogError("[LevelBrowser] Error loading treasures: " + task.Exception);
+                     return;
+                 }
+
+                 if (!task.Result.Exists)
+                 {
+                     ShowFeedback("This level has no treasures!");
+                     Debug.LogWarning("[LevelBrowser] No treasures found for level: " + levelId);
+                     return;
+                 }
+
+                 // ← NEW: Store treasures in GameManager
+                 var gameManager = GameManager.Instance;
+                 if (gameManager == null)
+                 {
+                     Debug.LogError("[LevelBrowser] GameManager not found!");
+                     return;
+                 }
+
+                 // Parse treasures from Firebase
+                 var treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
+                 foreach (var treasureSnapshot in task.Result.Children)
+                 {
+                     try
+                     {
+                         var treasure = ParseTreasure(treasureSnapshot);
+                         if (treasure != null)
+                             treasures.Add(treasure);
+                     }
+                     catch (System.Exception ex)
+                     {
+                         Debug.LogWarning("[LevelBrowser] Error parsing treasure: " + ex);
+                     }
+                 }
+
+                 Debug.Log($"[LevelBrowser] Loaded {treasures.Count} treasures for level: {levelName}");
+
+                 // ← NEW: Store treasures and set game mode
+                 gameManager.SetGameModeForLevel(levelId, levelName, treasures);
+
+                 ShowFeedback($"Starting '{levelName}'...");
+
+                 // Load AR scene
+                 UnityEngine.SceneManagement.SceneManager.LoadScene("ARScene");
+             });
+    }
+
+    private TreasureManagerGPS_Multiplayer.TreasureData ParseTreasure(Firebase.Database.DataSnapshot snapshot)
+    {
+        if (!snapshot.Exists) return null;
+
+        try
+        {
+            var treasure = new TreasureManagerGPS_Multiplayer.TreasureData
+            {
+                name = snapshot.HasChild("name") ? snapshot.Child("name").Value?.ToString() ?? "Treasure" : "Treasure",
+                lat = snapshot.HasChild("lat") ? double.Parse(snapshot.Child("lat").Value?.ToString() ?? "0") : 0,
+                lon = snapshot.HasChild("lon") ? double.Parse(snapshot.Child("lon").Value?.ToString() ?? "0") : 0,
+                points = snapshot.HasChild("points") ? int.Parse(snapshot.Child("points").Value?.ToString() ?? "100") : 100
+            };
+
+            // Parse challenge if it exists
+            if (snapshot.HasChild("challenge"))
+            {
+                var challengeSnapshot = snapshot.Child("challenge");
+
+                var challengeType = (ChallengeType)int.Parse(challengeSnapshot.Child("type").Value?.ToString() ?? "0");
+
+                var challenge = new ChallengeData
+                {
+                    type = challengeType,
+                    bonusPoints = int.Parse(challengeSnapshot.Child("bonusPoints").Value?.ToString() ?? "0"),
+                    maxAttempts = int.Parse(challengeSnapshot.Child("maxAttempts").Value?.ToString() ?? "1"),
+                    timeLimitSeconds = int.Parse(challengeSnapshot.Child("timeLimitSeconds").Value?.ToString() ?? "60"),
+                    minigameId = challengeSnapshot.Child("minigameId").Value?.ToString() ?? ""
+                };
+
+                // Parse MCQ options ← Changed from ChallengeOption to MCQOption
+                if (challengeType == ChallengeType.MCQ && challengeSnapshot.HasChild("options"))
+                {
+                    challenge.question = challengeSnapshot.Child("question").Value?.ToString() ?? "";
+                    challenge.options = new List<MCQOption>();  // ← Changed here
+
+                    foreach (var optionSnapshot in challengeSnapshot.Child("options").Children)
+                    {
+                        challenge.options.Add(new MCQOption  // ← Changed here
+                        {
+                            text = optionSnapshot.Child("text").Value?.ToString() ?? "",
+                            isCorrect = bool.Parse(optionSnapshot.Child("isCorrect").Value?.ToString() ?? "false")
+                        });
+                    }
+                }
+
+                treasure.challenge = challenge;
+                Debug.Log($"[LevelBrowser] Parsed challenge for treasure: {treasure.name} (type: {challengeType})");
+            }
+
+            return treasure;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("[LevelBrowser] Error parsing treasure: " + ex);
+            return null;
         }
     }
 

@@ -4,55 +4,54 @@ using TMPro;
 using System;
 
 /// <summary>
-/// Represents a single level item in the browser list
+/// Displays a single level in the browse list
 /// </summary>
 public class LevelBrowserItem : MonoBehaviour
 {
-    [SerializeField] private TextMeshProUGUI levelNameText;
-    [SerializeField] private TextMeshProUGUI creatorNameText;
-    [SerializeField] private TextMeshProUGUI treasureCountText;
-    [SerializeField] private TextMeshProUGUI difficultyText;
-    [SerializeField] private TextMeshProUGUI playsText;
+    [SerializeField] private TMP_Text titleText;
+    [SerializeField] private TMP_Text descriptionText;
+    [SerializeField] private TMP_Text treasureCountText;
+    [SerializeField] private TMP_Text playsCountText;
+    [SerializeField] private TMP_Text difficultyText;
     [SerializeField] private Button playButton;
 
-    private LevelBrowserManager.LevelData levelData;
-    private Action<string> onPlayCallback;
+    private string levelId;
+    private Action<string> onPlayClicked;
 
-    public void Setup(LevelBrowserManager.LevelData data, Action<string> playCallback)
+    public void Setup(LevelBrowserManager.LevelData levelData, Action<string> playCallback)
     {
-        levelData = data;
-        onPlayCallback = playCallback;
+        levelId = levelData.levelId;
+        onPlayClicked = playCallback;
 
-        // Update UI
-        if (levelNameText != null)
-            levelNameText.text = data.name;
+        // Set text values
+        if (titleText != null)
+            titleText.text = levelData.name;
 
-        if (creatorNameText != null)
-            creatorNameText.text = $"by {data.creatorName}";
+        if (descriptionText != null)
+            descriptionText.text = levelData.description;
 
         if (treasureCountText != null)
-            treasureCountText.text = $"💎 {data.treasureCount}";
+            treasureCountText.text = $"Treasures: {levelData.treasureCount}";
+
+        if (playsCountText != null)
+            playsCountText.text = $"Plays: {levelData.plays}";
 
         if (difficultyText != null)
-            difficultyText.text = data.difficulty;
+            difficultyText.text = $"Difficulty: {levelData.difficulty}";
 
-        if (playsText != null)
-            playsText.text = $"▶️ {data.plays}";
-
+        // Wire play button
         if (playButton != null)
         {
             playButton.onClick.RemoveAllListeners();
-            playButton.onClick.AddListener(OnPlayClicked);
+            playButton.onClick.AddListener(OnPlayButtonClicked);
         }
 
-        Debug.Log($"[LevelItem] Setup level: {data.name}");
+        Debug.Log($"[LevelItem] Setup level: {levelData.name}");
     }
 
-    private void OnPlayClicked()
+    private void OnPlayButtonClicked()
     {
-        if (onPlayCallback != null)
-        {
-            onPlayCallback.Invoke(levelData.levelId);
-        }
+        Debug.Log($"[LevelItem] Play button clicked for level: {levelId}");
+        onPlayClicked?.Invoke(levelId);
     }
 }
