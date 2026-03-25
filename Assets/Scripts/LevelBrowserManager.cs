@@ -43,6 +43,7 @@ public class LevelBrowserManager : MonoBehaviour
     private void Start()
     {
         SetupButtons();
+        SetupLevelListLayout();
         InitializeFirebaseWithDelay();
     }
 
@@ -105,6 +106,34 @@ public class LevelBrowserManager : MonoBehaviour
             levelBrowserPanel.SetActive(false);
 
         Debug.Log("[LevelBrowser] Level browser closed");
+    }
+
+    /// <summary>
+    /// Setup the layout for the level list
+    /// </summary>
+    private void SetupLevelListLayout()
+    {
+        if (levelListContent == null)
+        {
+            Debug.LogError("[LevelBrowser] levelListContent is not assigned!");
+            return;
+        }
+
+        // Check if VerticalLayoutGroup exists
+        VerticalLayoutGroup layoutGroup = levelListContent.GetComponent<VerticalLayoutGroup>();
+        if (layoutGroup == null)
+        {
+            layoutGroup = levelListContent.gameObject.AddComponent<VerticalLayoutGroup>();
+            Debug.Log("[LevelBrowser] Added VerticalLayoutGroup to levelListContent");
+        }
+
+        // Configure layout
+        layoutGroup.childForceExpandHeight = false;
+        layoutGroup.childForceExpandWidth = true;
+        layoutGroup.spacing = 15f;  // Space between items
+        layoutGroup.padding = new RectOffset(10, 10, 10, 10);  // Padding around items
+
+        Debug.Log("[LevelBrowser] Level list layout configured");
     }
 
     private void LoadLevels()
@@ -215,11 +244,18 @@ public class LevelBrowserManager : MonoBehaviour
         }
 
         Debug.Log($"[LevelBrowser] Creating item for level: {levelData.name}");
-        Debug.Log($"[LevelBrowser] Parent transform: {levelListContent.name}, Child count before: {levelListContent.childCount}");
 
         GameObject itemObj = Instantiate(levelItemPrefab, levelListContent);
 
-        Debug.Log($"[LevelBrowser] Instantiated item, Child count after: {levelListContent.childCount}");
+        // Ensure the item has a LayoutElement for proper sizing
+        LayoutElement layoutElement = itemObj.GetComponent<LayoutElement>();
+        if (layoutElement == null)
+        {
+            layoutElement = itemObj.AddComponent<LayoutElement>();
+        }
+
+        layoutElement.preferredHeight = 120f;  // Height of each level item
+        layoutElement.flexibleWidth = 1f;      // Take full width
 
         LevelBrowserItem itemController = itemObj.GetComponent<LevelBrowserItem>();
 
@@ -249,7 +285,6 @@ public class LevelBrowserManager : MonoBehaviour
             ShowFeedback($"Loading '{levelData.name}'...");
             Debug.Log($"[LevelBrowser] Level selected: {levelData.name}. Saved to PlayerPrefs.");
 
-            // ← NEW: Load treasures and start the game
             StartCoroutine(LoadLevelTreasuresAndStart(levelId, levelData.name));
         }
         else
@@ -263,7 +298,6 @@ public class LevelBrowserManager : MonoBehaviour
     {
         yield return new WaitForSeconds(1f);
 
-        // Load treasures from Firebase
         dbRef.Child("levels").Child(levelId).Child("treasures")
              .GetValueAsync()
              .ContinueWithOnMainThread(task =>
@@ -282,23 +316,20 @@ public class LevelBrowserManager : MonoBehaviour
                      return;
                  }
 
-                 // ← NEW: Store treasures in GameManager
-                 var gameManager = GameManager.Instance;
-                 if (gameManager == null)
-                 {
-                     Debug.LogError("[LevelBrowser] GameManager not found!");
-                     return;
-                 }
-
-                 // Parse treasures from Firebase
                  var treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
+                 var treasureKeys = new Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string>();
+
                  foreach (var treasureSnapshot in task.Result.Children)
                  {
                      try
                      {
                          var treasure = ParseTreasure(treasureSnapshot);
                          if (treasure != null)
+                         {
                              treasures.Add(treasure);
+                             treasureKeys[treasure] = treasureSnapshot.Key;
+                             Debug.Log($"[LevelBrowser] ✓ Loaded treasure '{treasure.name}' with Firebase key: {treasureSnapshot.Key}");
+                         }
                      }
                      catch (System.Exception ex)
                      {
@@ -306,14 +337,21 @@ public class LevelBrowserManager : MonoBehaviour
                      }
                  }
 
-                 Debug.Log($"[LevelBrowser] Loaded {treasures.Count} treasures for level: {levelName}");
+                 Debug.Log($"[LevelBrowser] Total treasureKeys mapped: {treasureKeys.Count}");
 
-                 // ← NEW: Store treasures and set game mode
-                 gameManager.SetGameModeForLevel(levelId, levelName, treasures);
+                 var gameManager = GameManager.Instance;
+                 if (gameManager != null)
+                 {
+                     gameManager.SetGameModeForLevel(levelId, levelName, treasures);
+                     gameManager.TreasureKeys = treasureKeys;
+                     Debug.Log($"[LevelBrowser] ✓ Passed {treasureKeys.Count} treasure key mappings to GameManager");
+                 }
+                 else
+                 {
+                     Debug.LogError("[LevelBrowser] GameManager not found!");
+                 }
 
                  ShowFeedback($"Starting '{levelName}'...");
-
-                 // Load AR scene
                  UnityEngine.SceneManagement.SceneManager.LoadScene("ARScene");
              });
     }

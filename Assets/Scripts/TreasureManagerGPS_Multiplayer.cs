@@ -8,6 +8,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
+using System.Linq;
 
 public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 {
@@ -258,23 +259,42 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         servicesReady = true;
         initialized = true;
 
-        int index = 0;
+        var gameManager = GameManager.Instance;
+        var treasureKeys = gameManager?.TreasureKeys;
+
+        Debug.Log($"[TreasureManagerGPS_Multiplayer] TreasureKeys from GameManager: {(treasureKeys != null ? treasureKeys.Count : 0)} mappings");
+        if (treasureKeys != null)
+        {
+            foreach (var kvp in treasureKeys)
+            {
+                Debug.Log($"[TreasureManagerGPS_Multiplayer] Key mapping: {kvp.Value} <- {kvp.Key.name}");
+            }
+        }
+
         foreach (var treasure in treasures)
         {
-            // ← Generate a valid key without special characters
-            string validKey = $"treasure_{index}";
+            // Get the Firebase key for this treasure
+            string validKey = "treasure_0";
+
+            if (treasureKeys != null && treasureKeys.TryGetValue(treasure, out string key))
+            {
+                validKey = key;
+                Debug.Log($"[TreasureManagerGPS_Multiplayer] ✓ Found mapping for '{treasure.name}': {validKey}");
+            }
+            else
+            {
+                Debug.LogWarning($"[TreasureManagerGPS_Multiplayer] ✗ No mapping found for '{treasure.name}', using: {validKey}");
+            }
 
             var treasureObj = new Treasure
             {
-                key = validKey,  // ← Use safe key
+                key = validKey,
                 data = treasure,
                 instance = null
             };
 
             localTreasures[validKey] = treasureObj;
             Debug.Log($"[TreasureManagerGPS_Multiplayer] Loaded treasure: {treasure.name} (key: {validKey})");
-
-            index++;
         }
 
         WireButtons();
@@ -483,26 +503,86 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     private void RunCollectTransaction(Treasure target, int bonusPoints)
     {
         string myUserId = authManager.UserId;
+        bool isSinglePlayer = currentRoomId.StartsWith("-");
 
-        // Check if this is a single-player level or multiplayer room
-        bool isSinglePlayer = !currentRoomId.StartsWith("-"); // Single-player levels use levelId, multiplayer rooms start with "-"
-
-        DatabaseReference treasureRef;
-
+        // For single-player, save to a separate collection to track who collected what
         if (isSinglePlayer)
         {
-            // Single-player: store in levels collection
-            treasureRef = dbRef
-                .Child("levels").Child(currentRoomId)
-                .Child("treasures").Child(target.key);
-        }
-        else
+            var collectedData = new Dictionary<string, object>
         {
-            // Multiplayer: store in rooms collection
-            treasureRef = dbRef
-                .Child("rooms").Child(currentRoomId)
-                .Child("gameState").Child(target.key);
+            { "treasureName", target.data.name },
+            { "treasureKey", target.key },
+            { "collectedBy", myUserId },
+            { "points", target.data.points + bonusPoints }
+        };
+
+            dbRef.Child("levels").Child(currentRoomId)
+                 .Child("collectedTreasures").Child(myUserId)
+                 .Child(target.key)
+                 .SetValueAsync(collectedData)
+                 .ContinueWithOnMainThread(task =>
+                 {
+                     isCollectInProgress = false;
+                     if (collectButton != null) collectButton.interactable = true;
+
+                     if (task.IsFaulted)
+                     {
+                         Debug.LogError("Failed to save collected treasure: " + task.Exception);
+                         LogToUI("Collect failed");
+                         return;
+                     }
+
+                     // SUCCESS
+                     long totalEarned = target.data.points + bonusPoints;
+
+                     if (ScoreManager.Instance != null)
+                     {
+                         ScoreManager.Instance.AddTreasurePoints();
+                         int currentScore = ScoreManager.Instance.GetScore();
+
+                         dbRef.Child("levels").Child(currentRoomId)
+                              .Child("players").Child(myUserId)
+                              .Child("score")
+                              .SetValueAsync(currentScore);
+                     }
+
+                     dbRef.Child("levels").Child(currentRoomId)
+                          .Child("scores").Child(myUserId)
+                          .RunTransaction(scoreData =>
+                          {
+                              long current = scoreData.Value == null ? 0 : (long)scoreData.Value;
+                              scoreData.Value = current + totalEarned;
+                              return TransactionResult.Success(scoreData);
+                          });
+
+                     if (localTreasures.ContainsKey(target.key))
+                     {
+                         if (localTreasures[target.key].instance != null)
+                             Destroy(localTreasures[target.key].instance);
+                         localTreasures.Remove(target.key);
+                     }
+
+                     if (collectButton != null)
+                     {
+                         collectButton.gameObject.SetActive(false);
+                         collectButton.interactable = false;
+                     }
+
+                     currentTargetKey = null;
+                     LogToUI($"Treasure collected! +{totalEarned} points");
+                     Debug.Log($"[TreasureManager] ✓ Successfully collected '{target.data.name}'!");
+
+                     // ← ADD THIS: Check if any treasures remain
+                     Invoke(nameof(CheckForRemainingTreasures), 2f);
+                 });
+
+            return;
         }
+
+        // MULTIPLAYER PATH
+        DatabaseReference treasureRef = dbRef
+            .Child("rooms").Child(currentRoomId)
+            .Child("gameState").Child(target.key);
 
         bool abortedAlreadyCollected = false;
         bool abortedMissingNode = false;
@@ -526,17 +606,13 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             else
                 collectedBy = new Dictionary<string, object>();
 
-            // If THIS USER already collected it, abort
             if (collectedBy.ContainsKey(myUserId))
             {
                 abortedAlreadyCollected = true;
                 return TransactionResult.Abort();
             }
 
-            // Add this user to the collectors
             collectedBy[myUserId] = true;
-
-            // Mark treasure as collected
             data["collectedBy"] = collectedBy;
             data["isCollected"] = true;
 
@@ -580,75 +656,74 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 return;
             }
 
-            // ← SUCCESS: Treasure collected!
+            // SUCCESS - multiplayer
             long totalEarned = target.data.points + bonusPoints;
 
-            // Update ScoreManager UI
             if (ScoreManager.Instance != null)
             {
                 ScoreManager.Instance.AddTreasurePoints();
-
                 int currentScore = ScoreManager.Instance.GetScore();
 
-                // Save to Firebase
-                string userId = authManager.UserId;
-
-                if (isSinglePlayer)
-                {
-                    // Single-player: store score in levels
-                    dbRef.Child("levels").Child(currentRoomId)
-                         .Child("players").Child(userId)
-                         .Child("score")
-                         .SetValueAsync(currentScore)
-                         .ContinueWithOnMainThread(scoreTask =>
-                         {
-                             if (scoreTask.IsCompleted)
-                             {
-                                 Debug.Log($"[TreasureManager] Score saved: {currentScore}");
-                             }
-                         });
-                }
-                else
-                {
-                    // Multiplayer: store score in rooms
-                    dbRef.Child("rooms").Child(currentRoomId)
-                         .Child("players").Child(userId)
-                         .Child("currentScore")
-                         .SetValueAsync(currentScore)
-                         .ContinueWithOnMainThread(scoreTask =>
-                         {
-                             if (scoreTask.IsCompleted)
-                             {
-                                 Debug.Log($"[TreasureManager] Score saved to Firebase: {currentScore}");
-                             }
-                         });
-                }
+                dbRef.Child("rooms").Child(currentRoomId)
+                     .Child("players").Child(myUserId)
+                     .Child("currentScore")
+                     .SetValueAsync(currentScore);
             }
 
-            // Update score in Firebase
-            DatabaseReference scoreRef = isSinglePlayer
-                ? dbRef.Child("levels").Child(currentRoomId).Child("scores").Child(myUserId)
-                : dbRef.Child("rooms").Child(currentRoomId).Child("scores").Child(myUserId);
+            dbRef.Child("rooms").Child(currentRoomId)
+                 .Child("scores").Child(myUserId)
+                 .RunTransaction(scoreData =>
+                 {
+                     long current = scoreData.Value == null ? 0 : (long)scoreData.Value;
+                     scoreData.Value = current + totalEarned;
+                     return TransactionResult.Success(scoreData);
+                 });
 
-            scoreRef.RunTransaction(scoreData =>
-            {
-                long current = scoreData.Value == null ? 0 : (long)scoreData.Value;
-                scoreData.Value = current + totalEarned;
-                return TransactionResult.Success(scoreData);
-            }).ContinueWithOnMainThread(scoreTask =>
-            {
-                if (scoreTask.IsFaulted)
-                {
-                    Debug.LogError("Failed to update score in Firebase: " + scoreTask.Exception);
-                }
-                else
-                {
-                    Debug.Log($"[TreasureManager] Score updated: +{totalEarned} points");
-                }
-            });
+            Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected!");
 
-            Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected by {myUserId}");
+            // ← ADD THIS: Check if any treasures remain
+            Invoke(nameof(CheckForRemainingTreasures), 2f);
         });
+    }
+
+    /// <summary>
+    /// Check if there are any remaining treasures to collect.
+    /// If none remain, load the scoreboard. Otherwise, continue the game.
+    /// </summary>
+    private void CheckForRemainingTreasures()
+    {
+        // Count uncollected treasures
+        int uncollectedCount = 0;
+        foreach (var treasure in localTreasures.Values)
+        {
+            bool alreadyCollected = treasure.data.collectedBy != null && treasure.data.collectedBy.Count > 0;
+            if (!alreadyCollected)
+                uncollectedCount++;
+        }
+
+        Debug.Log($"[TreasureManager] Remaining treasures: {uncollectedCount} / {localTreasures.Count}");
+
+        if (uncollectedCount == 0)
+        {
+            // No more treasures - go to scoreboard
+            Debug.Log("[TreasureManager] All treasures collected! Loading scoreboard...");
+            LoadScoreboard();
+        }
+        else
+        {
+            // Still treasures remaining - continue game
+            Debug.Log($"[TreasureManager] Continue hunting! {uncollectedCount} treasures left.");
+            LogToUI($"Great job! {uncollectedCount} treasures remaining.");
+        }
+    }
+
+    private void LoadScoreboard()
+    {
+        CancelInvoke(nameof(UpdateFinderState));
+        StopListeningForTreasures();
+
+        // Load the scoreboard scene
+        UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
     }
 
     // --- FINDER LOGIC ---

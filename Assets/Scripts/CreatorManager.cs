@@ -612,91 +612,117 @@ public class CreatorMapController : MonoBehaviour
 
     private void UploadTreasuresToLevel(string levelId, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
     {
-        int uploadedCount = 0;
-        int totalCount = treasures.Count;
-        int treasureIndex = 0;
-
-        Debug.Log($"[CreatorMapController] Starting to upload {totalCount} treasures");
-
-        foreach (var treasure in treasures)
-        {
-            string treasureId = $"treasure_{treasureIndex}";
-
-            var treasureData = new Dictionary<string, object>
-        {
-            { "name", treasure.name },
-            { "lat", treasure.lat },
-            { "lon", treasure.lon },
-            { "points", treasure.points }
-        };
-
-            // ← ADD THIS: Include challenge if it exists
-            if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
+        // First, get the existing treasure keys from the level
+        dbRef.Child("levels").Child(levelId).Child("treasures")
+            .GetValueAsync()
+            .ContinueWithOnMainThread(task =>
             {
-                var challengeData = new Dictionary<string, object>
-            {
-                { "type", (int)treasure.challenge.type },
-                { "bonusPoints", treasure.challenge.bonusPoints },
-                { "maxAttempts", treasure.challenge.maxAttempts },
-                { "timeLimitSeconds", treasure.challenge.timeLimitSeconds },
-                { "minigameId", treasure.challenge.minigameId ?? "" }
-            };
-
-                // Add MCQ-specific fields
-                if (treasure.challenge.type == ChallengeType.MCQ)
+                if (task.IsFaulted)
                 {
-                    challengeData["question"] = treasure.challenge.question ?? "";
-
-                    var optionsData = new List<object>();
-                    if (treasure.challenge.options != null)
-                    {
-                        foreach (var option in treasure.challenge.options)
-                        {
-                            optionsData.Add(new Dictionary<string, object>
-                        {
-                            { "text", option.text },
-                            { "isCorrect", option.isCorrect }
-                        });
-                        }
-                    }
-                    challengeData["options"] = optionsData;
+                    ShowUploadFeedback("Error reading existing treasures");
+                    Debug.LogError("[CreatorMapController] Error: " + task.Exception);
+                    return;
                 }
 
-                treasureData["challenge"] = challengeData;
-                Debug.Log($"[CreatorMapController] Added challenge to treasure: {treasure.name} (type: {treasure.challenge.type})");
-            }
+                var existingKeys = new Dictionary<int, string>();
+                int keyIndex = 0;
 
-            dbRef.Child("levels").Child(levelId)
-                 .Child("treasures").Child(treasureId)
-                 .SetValueAsync(treasureData)
-                 .ContinueWithOnMainThread(task =>
-                 {
-                     uploadedCount++;
+                if (task.Result.Exists)
+                {
+                    // Map existing treasure keys
+                    foreach (var snapshot in task.Result.Children)
+                    {
+                        existingKeys[keyIndex] = snapshot.Key;
+                        keyIndex++;
+                        Debug.Log($"[CreatorMapController] Found existing treasure key: {snapshot.Key}");
+                    }
+                }
 
-                     if (task.IsFaulted)
-                     {
-                         Debug.LogError("[CreatorMapController] Treasure upload failed: " + task.Exception);
-                     }
-                     else
-                     {
-                         Debug.Log($"[CreatorMapController] Uploaded treasure {uploadedCount}/{totalCount}");
-                     }
+                // Now upload treasures using existing keys or new keys
+                int uploadedCount = 0;
+                int totalCount = treasures.Count;
 
-                     if (uploadProgressBar != null)
-                         uploadProgressBar.value = (float)uploadedCount / totalCount;
+                for (int i = 0; i < treasures.Count; i++)
+                {
+                    var treasure = treasures[i];
 
-                     if (uploadedCount >= totalCount)
-                     {
-                         ShowUploadFeedback($"Level '{levelNameInput.text}' uploaded successfully!");
-                         Debug.Log($"[CreatorMapController] All treasures uploaded for level: {levelId}");
+                    // Use existing key if available, otherwise generate new one
+                    string treasureId = existingKeys.ContainsKey(i) ? existingKeys[i] : dbRef.Child("levels").Child(levelId).Child("treasures").Push().Key;
 
-                         Invoke(nameof(CloseUploadPanel), 2f);
-                         if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
-                     }
-                 });
+                    var treasureData = new Dictionary<string, object>
+                    {
+                    { "name", treasure.name },
+                    { "lat", treasure.lat },
+                    { "lon", treasure.lon },
+                    { "points", treasure.points }
+                    };
 
-            treasureIndex++;
-        }
+                    // Include challenge if it exists
+                    if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
+                    {
+                        var challengeData = new Dictionary<string, object>
+                        {
+                        { "type", (int)treasure.challenge.type },
+                        { "bonusPoints", treasure.challenge.bonusPoints },
+                        { "maxAttempts", treasure.challenge.maxAttempts },
+                        { "timeLimitSeconds", treasure.challenge.timeLimitSeconds },
+                        { "minigameId", treasure.challenge.minigameId ?? "" }
+                        };
+
+                        if (treasure.challenge.type == ChallengeType.MCQ)
+                        {
+                            challengeData["question"] = treasure.challenge.question ?? "";
+
+                            var optionsData = new List<object>();
+                            if (treasure.challenge.options != null)
+                            {
+                                foreach (var option in treasure.challenge.options)
+                                {
+                                    optionsData.Add(new Dictionary<string, object>
+                                    {
+                                    { "text", option.text },
+                                    { "isCorrect", option.isCorrect }
+                                    });
+                                }
+                            }
+                            challengeData["options"] = optionsData;
+                        }
+
+                        treasureData["challenge"] = challengeData;
+                        Debug.Log($"[CreatorMapController] Added challenge to treasure: {treasure.name}");
+                    }
+
+                    int capturedIndex = i;
+                    dbRef.Child("levels").Child(levelId)
+                         .Child("treasures").Child(treasureId)
+                         .SetValueAsync(treasureData)
+                         .ContinueWithOnMainThread(uploadTask =>
+                         {
+                             uploadedCount++;
+
+                             if (uploadTask.IsFaulted)
+                             {
+                                 Debug.LogError("[CreatorMapController] Treasure upload failed: " + uploadTask.Exception);
+                             }
+                             else
+                             {
+                                 Debug.Log($"[CreatorMapController] Uploaded treasure {uploadedCount}/{totalCount} with key: {treasureId}");
+                             }
+
+                             if (uploadProgressBar != null)
+                                 uploadProgressBar.value = (float)uploadedCount / totalCount;
+
+                             if (uploadedCount >= totalCount)
+                             {
+                                 ShowUploadFeedback($"Level '{levelNameInput.text}' uploaded successfully!");
+                                 Debug.Log($"[CreatorMapController] All treasures uploaded for level: {levelId}");
+
+                                 Invoke(nameof(CloseUploadPanel), 2f);
+                                 if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                             }
+                         });
+                }
+            });
     }
 
     private void CloseUploadPanel()

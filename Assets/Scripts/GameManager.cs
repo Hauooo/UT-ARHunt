@@ -162,14 +162,14 @@ public class GameManager : MonoBehaviour
     public void SetGameModeForLevel(string levelId, string levelName, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
     {
         CurrentMode = GameMode.PlayingInRoom;
-        CurrentRoomId = levelId;  // Use level ID as room ID
-        IsHost = true;  // Player is the "host" of their own single-player game
-
-        // Store treasures for the TreasureManager to use
+        CurrentRoomId = levelId;
+        IsHost = true;
         CurrentLevelTreasures = treasures;
 
         Debug.Log($"[GameManager] Set game mode for level: {levelName} ({levelId}) with {treasures.Count} treasures");
     }
+
+    public Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string> TreasureKeys { get; set; }
 
     // Add this field to GameManager
     public List<TreasureManagerGPS_Multiplayer.TreasureData> CurrentLevelTreasures { get; set; }

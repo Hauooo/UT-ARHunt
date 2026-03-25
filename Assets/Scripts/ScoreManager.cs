@@ -15,17 +15,18 @@ public class ScoreManager : MonoBehaviour
     [Header("UI")]
     [SerializeField] private TextMeshProUGUI playerNameText;
     [SerializeField] private TextMeshProUGUI scoreText;
-    [SerializeField] private TextMeshProUGUI timeTakenText;  // ← NEW
+    [SerializeField] private TextMeshProUGUI timeTakenText;
 
     [Header("Score Settings")]
     [SerializeField] private int pointsPerTreasure = 10;
+    [SerializeField] private AuthManager authManager;  // ← Fixed: AuthManager (not Authmanager)
 
     private int currentScore = 0;
     private string playerName = "Player";
     private DatabaseReference dbRef;
 
-    private float gameStartTime = 0f;  // ← NEW: Track when game started
-    private int secondsTaken = 0;       // ← NEW: Time to complete
+    private float gameStartTime = 0f;
+    private int secondsTaken = 0;
 
     private void Awake()
     {
@@ -41,6 +42,18 @@ public class ScoreManager : MonoBehaviour
 
     private void Start()
     {
+        if (authManager == null)
+        {
+            Debug.LogError("[ScoreManager] AuthManager reference is missing!");
+            authManager = FindObjectOfType<AuthManager>();
+        }
+
+        if (authManager == null)
+        {
+            Debug.LogError("[ScoreManager] Could not find AuthManager in scene!");
+            return;
+        }
+
         LoadPlayerName();
         InitializeFirebase();
         LoadScoreAndTimeFromFirebase();
@@ -86,106 +99,102 @@ public class ScoreManager : MonoBehaviour
 
     /// <summary>
     /// Load score and time from Firebase asynchronously
-    /// Score: rooms/{roomId}/scores/{userId}
-    /// Time: rooms/{roomId}/players/{userId}/timeTakenSeconds
     /// </summary>
     private void LoadScoreAndTimeFromFirebase()
     {
-        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
-        if (user == null)
+        string userId = authManager.UserId;
+        string gameRoomId = GameManager.Instance?.CurrentRoomId;
+
+        if (string.IsNullOrEmpty(gameRoomId))
         {
-            Debug.LogWarning("[ScoreManager] No Firebase user. Using defaults.");
-            UpdateScoreboardUI();
+            Debug.LogWarning("[ScoreManager] No room ID found");
             return;
         }
 
-        if (GameManager.Instance == null)
+        // Check if it's single-player or multiplayer
+        bool isSinglePlayer = gameRoomId.StartsWith("-");
+
+        DatabaseReference scoreRef = isSinglePlayer
+            ? dbRef.Child("levels").Child(gameRoomId).Child("scores").Child(userId)
+            : dbRef.Child("rooms").Child(gameRoomId).Child("scores").Child(userId);
+
+        string scorePath = isSinglePlayer
+            ? $"levels/{gameRoomId}/scores/{userId}"
+            : $"rooms/{gameRoomId}/scores/{userId}";
+
+        Debug.Log($"[ScoreManager] Loading score from {(isSinglePlayer ? "level" : "room")}: {scorePath}");
+
+        scoreRef.GetValueAsync().ContinueWithOnMainThread(task =>
         {
-            Debug.LogWarning("[ScoreManager] GameManager not available.");
-            UpdateScoreboardUI();
-            return;
-        }
+            if (task.IsFaulted)
+            {
+                Debug.LogWarning("[ScoreManager] Error loading score: " + task.Exception);
+                LoadTimeFromFirebase();
+                return;
+            }
 
-        string roomId = GameManager.Instance.CurrentRoomId;
-        if (string.IsNullOrEmpty(roomId))
-        {
-            Debug.LogWarning("[ScoreManager] No room ID.");
-            UpdateScoreboardUI();
-            return;
-        }
+            if (!task.Result.Exists)
+            {
+                Debug.Log("[ScoreManager] No score found in Firebase. Using default: 0");
+                LoadTimeFromFirebase();
+                return;
+            }
 
-        if (dbRef == null)
-        {
-            Debug.LogWarning("[ScoreManager] Firebase not initialized.");
-            UpdateScoreboardUI();
-            return;
-        }
+            if (long.TryParse(task.Result.Value.ToString(), out long score))
+            {
+                currentScore = (int)score;
+                Debug.Log($"[ScoreManager] Score loaded: {currentScore}");
+            }
 
-        Debug.Log($"[ScoreManager] Loading score from rooms/{roomId}/scores/{user.UserId}");
-        Debug.Log($"[ScoreManager] Loading time from rooms/{roomId}/players/{user.UserId}");
-
-        // ← LOAD SCORE from scores node (not players node!)
-        dbRef.Child("rooms").Child(roomId)
-             .Child("scores").Child(user.UserId)
-             .GetValueAsync()
-             .ContinueWithOnMainThread(scoreTask =>
-             {
-                 if (scoreTask.IsFaulted)
-                 {
-                     Debug.LogError("[ScoreManager] Failed to load score: " + scoreTask.Exception);
-                 }
-                 else if (scoreTask.IsCompleted && scoreTask.Result.Exists)
-                 {
-                     if (long.TryParse(scoreTask.Result.Value.ToString(), out long score))
-                     {
-                         currentScore = (int)score;
-                         Debug.Log($"[ScoreManager] ✓ Loaded score from Firebase: {currentScore}");
-                     }
-                 }
-                 else
-                 {
-                     Debug.Log("[ScoreManager] No score found in Firebase. Using default: 0");
-                 }
-
-                 // After loading score, load time
-                 LoadTimeFromFirebase(user.UserId, roomId);
-             });
+            LoadTimeFromFirebase();
+        });
     }
 
     /// <summary>
     /// Load time taken from Firebase
     /// </summary>
-    private void LoadTimeFromFirebase(string userId, string roomId)
+    private void LoadTimeFromFirebase()
     {
-        if (dbRef == null) return;
+        string userId = authManager.UserId;
+        string gameRoomId = GameManager.Instance?.CurrentRoomId;
 
-        // ← LOAD TIME from players node
-        dbRef.Child("rooms").Child(roomId)
-             .Child("players").Child(userId)
-             .Child("timeTakenSeconds")
-             .GetValueAsync()
-             .ContinueWithOnMainThread(timeTask =>
-             {
-                 if (timeTask.IsFaulted)
-                 {
-                     Debug.LogError("[ScoreManager] Failed to load time: " + timeTask.Exception);
-                 }
-                 else if (timeTask.IsCompleted && timeTask.Result.Exists)
-                 {
-                     if (long.TryParse(timeTask.Result.Value.ToString(), out long time))
-                     {
-                         secondsTaken = (int)time;
-                         Debug.Log($"[ScoreManager] ✓ Loaded time from Firebase: {secondsTaken}s");
-                     }
-                 }
-                 else
-                 {
-                     Debug.Log("[ScoreManager] No time found in Firebase. Using default: 0");
-                 }
+        if (string.IsNullOrEmpty(gameRoomId))
+        {
+            Debug.LogWarning("[ScoreManager] No room ID found");
+            UpdateScoreboardUI();
+            return;
+        }
 
-                 // Now update UI with both score and time
-                 UpdateScoreboardUI();
-             });
+        bool isSinglePlayer = gameRoomId.StartsWith("-");
+
+        DatabaseReference timeRef = isSinglePlayer
+            ? dbRef.Child("levels").Child(gameRoomId).Child("players").Child(userId).Child("elapsedTime")
+            : dbRef.Child("rooms").Child(gameRoomId).Child("players").Child(userId).Child("elapsedTime");
+
+        timeRef.GetValueAsync().ContinueWithOnMainThread(task =>
+        {
+            if (task.IsFaulted)
+            {
+                Debug.LogWarning("[ScoreManager] Error loading time: " + task.Exception);
+                UpdateScoreboardUI();
+                return;
+            }
+
+            if (!task.Result.Exists)
+            {
+                Debug.Log("[ScoreManager] No time found in Firebase. Using default: 0");
+                UpdateScoreboardUI();
+                return;
+            }
+
+            if (long.TryParse(task.Result.Value.ToString(), out long timeSeconds))
+            {
+                secondsTaken = (int)timeSeconds;
+                Debug.Log($"[ScoreManager] Time loaded: {secondsTaken}s");
+            }
+
+            UpdateScoreboardUI();
+        });
     }
 
     /// <summary>
@@ -208,7 +217,7 @@ public class ScoreManager : MonoBehaviour
     }
 
     /// <summary>
-    /// End the game timer and save time to Firebase (call this when all treasures collected)
+    /// End the game timer and save time to Firebase
     /// </summary>
     public void EndGameTimer()
     {
@@ -231,23 +240,26 @@ public class ScoreManager : MonoBehaviour
         if (GameManager.Instance == null) return;
 
         string roomId = GameManager.Instance.CurrentRoomId;
+        bool isSinglePlayer = roomId.StartsWith("-");
+
         if (string.IsNullOrEmpty(roomId)) return;
 
-        dbRef.Child("rooms").Child(roomId)
-             .Child("players").Child(user.UserId)
-             .Child("timeTakenSeconds")
-             .SetValueAsync(secondsTaken)
-             .ContinueWithOnMainThread(task =>
-             {
-                 if (task.IsCompleted)
-                 {
-                     Debug.Log($"[ScoreManager] Time saved to Firebase: {secondsTaken}s");
-                 }
-                 else if (task.IsFaulted)
-                 {
-                     Debug.LogError("[ScoreManager] Failed to save time: " + task.Exception);
-                 }
-             });
+        DatabaseReference timeRef = isSinglePlayer
+            ? dbRef.Child("levels").Child(roomId).Child("players").Child(user.UserId).Child("elapsedTime")
+            : dbRef.Child("rooms").Child(roomId).Child("players").Child(user.UserId).Child("elapsedTime");
+
+        timeRef.SetValueAsync(secondsTaken)
+            .ContinueWithOnMainThread(task =>
+            {
+                if (task.IsCompleted)
+                {
+                    Debug.Log($"[ScoreManager] Time saved to Firebase: {secondsTaken}s");
+                }
+                else if (task.IsFaulted)
+                {
+                    Debug.LogError("[ScoreManager] Failed to save time: " + task.Exception);
+                }
+            });
     }
 
     /// <summary>
@@ -304,7 +316,6 @@ public class ScoreManager : MonoBehaviour
         if (scoreText != null)
             scoreText.text = currentScore.ToString();
 
-        // ← NEW: Update time display
         if (timeTakenText != null)
             timeTakenText.text = GetFormattedTime();
 
