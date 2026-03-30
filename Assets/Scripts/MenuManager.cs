@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.UI;
 
 public class MenuManager : MonoBehaviour
 {
@@ -7,8 +8,9 @@ public class MenuManager : MonoBehaviour
     public GameObject playerPanel;
     public GameObject creatorPanel;
     public GameObject usernamePanel;
-    public GameObject levelBrowserPanel;    // ← NEW
-    public GameObject levelUploadPanel;     // ← NEW
+    public GameObject levelBrowserPanel;
+    public GameObject levelUploadPanel;
+    public GameObject myLevelsPanel;           // ← ADD THIS
 
     public GameObject joinRoomPanel;
     public GameObject createRoomPanel;
@@ -16,15 +18,30 @@ public class MenuManager : MonoBehaviour
     public GameObject roomLobbyPanel;
 
     [Header("Managers")]
-    [SerializeField] private LevelBrowserManager levelBrowserManager;  // ← NEW
-    [SerializeField] private LevelUploadManager levelUploadManager;    // ← NEW
-    [SerializeField] private LevelSetSelector levelSetSelector;      // ← NEW
+    [SerializeField] private LevelBrowserManager levelBrowserManager;
+    [SerializeField] private LevelUploadManager levelUploadManager;
+    [SerializeField] private LevelSetSelector levelSetSelector;
+    [SerializeField] private MyLevelsManager myLevelsManager;       // ← ALREADY HERE
+
+    [Header("Buttons")]
+    [SerializeField] private Button myLevelsButton;
 
     [HideInInspector] public GameObject activePanel;
 
     void Start()
     {
         ShowPanel(mainMenuPanel);
+
+        // Setup My Levels button
+        if (myLevelsButton != null && myLevelsManager != null)
+        {
+            myLevelsButton.onClick.AddListener(OnMyLevelsButton);
+            Debug.Log("[MenuManager] My Levels button setup");
+        }
+        else
+        {
+            Debug.LogError("[MenuManager] myLevelsButton or myLevelsManager not assigned!");
+        }
 
         if (GameManager.Instance != null)
         {
@@ -60,6 +77,7 @@ public class MenuManager : MonoBehaviour
         }
 
         activePanel.SetActive(true);
+        Debug.Log($"[MenuManager] Showing panel: {activePanel.name}");
     }
 
     // ==================== MAIN MENU ====================
@@ -78,6 +96,23 @@ public class MenuManager : MonoBehaviour
         {
             levelBrowserManager.OpenBrowser();
             Debug.Log("[MenuManager] Opened level browser");
+        }
+    }
+
+    /// <summary>
+    /// Open My Levels panel (NEW)
+    /// </summary>
+    public void OnMyLevelsButton()
+    {
+        ShowPanel(myLevelsPanel);
+        if (myLevelsManager != null)
+        {
+            myLevelsManager.OpenMyLevels();
+            Debug.Log("[MenuManager] Opened My Levels");
+        }
+        else
+        {
+            Debug.LogError("[MenuManager] MyLevelsManager not found");
         }
     }
 
@@ -107,6 +142,7 @@ public class MenuManager : MonoBehaviour
     public void OnJoinRoomButton() => ShowPanel(joinRoomPanel);
     public void OnCreateRoomButton() => ShowPanel(createRoomPanel);
 
+    // ==================== CALLBACKS ====================
     private void HandleLobbyReady(string roomId, bool isHost)
     {
         Debug.Log($"[MenuManager] Lobby ready! Room ID: {roomId} isHost={isHost}");
