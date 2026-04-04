@@ -75,6 +75,24 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private TMP_Text uploadFeedbackText;
     [SerializeField] private Scrollbar uploadProgressBar;
 
+    //Treasure Editor
+    [Header("Treasure Editor")]
+    [SerializeField] private GameObject treasureEditorPanel;
+    [SerializeField] private TMP_InputField treasureNameInput;
+    [SerializeField] private TMP_Text treasureLocationText;
+    [SerializeField] private TMP_Dropdown treasureSelectDropdown;
+    [SerializeField] private Button deleteTreasureButton;
+    [SerializeField] private Button saveTreasureButton;
+    [SerializeField] private Button closeTreasureEditorButton;
+
+    [Header("Checkpoint Editor")]
+    [SerializeField] private CheckpointEditorController checkpointEditor;  // ← Fixed typo
+    [SerializeField] private GameObject checkpointEditorPanel;  // ← Fixed typo
+    [SerializeField] private Button openCheckpointEditorButton;
+    [SerializeField] private Button saveCheckpointEditsButton;
+
+    private int selectedTreasureIndex = -1;
+
     // ── Challenge Panel ───────────────────────────────────────────────────
     [Header("Challenge Config")]
     [SerializeField] private ChallengeConfigController challengeConfig;
@@ -144,6 +162,44 @@ public class CreatorMapController : MonoBehaviour
         {
             setSelectionDropdown.onValueChanged.RemoveAllListeners();
             setSelectionDropdown.onValueChanged.AddListener(OnSetSelected);
+        }
+
+        // Wire treasure editor buttons
+        if (closeTreasureEditorButton != null)
+        {
+            closeTreasureEditorButton.onClick.RemoveAllListeners();
+            closeTreasureEditorButton.onClick.AddListener(CloseTreasureEditor);
+        }
+
+        if (saveTreasureButton != null)
+        {
+            saveTreasureButton.onClick.RemoveAllListeners();
+            saveTreasureButton.onClick.AddListener(SaveTreasureChanges);
+        }
+
+        if (deleteTreasureButton != null)
+        {
+            deleteTreasureButton.onClick.RemoveAllListeners();
+            deleteTreasureButton.onClick.AddListener(DeleteTreasure);
+        }
+
+        // Wire checkpoint editor buttons
+        if (openCheckpointEditorButton != null)
+        {
+            openCheckpointEditorButton.onClick.RemoveAllListeners();
+            openCheckpointEditorButton.onClick.AddListener(OpenCheckpointEditor);
+        }
+
+        if (saveCheckpointEditsButton != null)
+        {
+            saveCheckpointEditsButton.onClick.RemoveAllListeners();
+            saveCheckpointEditsButton.onClick.AddListener(SaveCheckpointEditsToSet);
+        }
+
+        // Wire checkpoint editor close button
+        if (checkpointEditor != null)
+        {
+            checkpointEditor.SetOnCloseCallback(OnCheckpointEditorClosed);
         }
 
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
@@ -424,6 +480,240 @@ public class CreatorMapController : MonoBehaviour
                 CloseAllPanels();
             });
     }
+
+    /// <summary>
+    /// Open treasure editor to modify a specific checkpoint
+    /// </summary>
+    private void OpenTreasureEditor(int treasureIndex)
+    {
+        if (treasureIndex < 0 || treasureIndex >= workingPins.Count)
+        {
+            SetStatus("Invalid treasure selected");
+            return;
+        }
+
+        selectedTreasureIndex = treasureIndex;
+        var treasure = workingPins[treasureIndex];
+
+        if (treasureEditorPanel != null)
+            treasureEditorPanel.SetActive(true);
+
+        if (treasureNameInput != null)
+            treasureNameInput.text = treasure.name;
+
+        if (treasureLocationText != null)
+            treasureLocationText.text = $"Location: ({treasure.lat:F4}, {treasure.lon:F4})\nPoints: {treasure.points}";
+
+        SetStatus($"Editing treasure #{treasureIndex + 1}: {treasure.name}");
+        Debug.Log($"[CreatorMapController] Opened editor for treasure {treasureIndex}: {treasure.name}");
+    }
+
+    private void SaveTreasureChanges()
+    {
+        if (selectedTreasureIndex < 0 || selectedTreasureIndex >= workingPins.Count)
+            return;
+
+        string newName = treasureNameInput.text.Trim();
+        if (string.IsNullOrEmpty(newName))
+        {
+            SetStatus("Treasure name cannot be empty");
+            return;
+        }
+
+        workingPins[selectedTreasureIndex].name = newName;
+
+        // Update preview pins
+        if (selectedTreasureIndex < previewPinObjects.Count)
+        {
+            var label = previewPinObjects[selectedTreasureIndex].GetComponentInChildren<TMP_Text>();
+            if (label != null)
+                label.text = newName;
+        }
+
+        SetStatus($"✓ Treasure '{newName}' updated!");
+        CloseTreasureEditor();
+        Debug.Log($"[CreatorMapController] Saved treasure {selectedTreasureIndex}: {newName}");
+    }
+
+    private void DeleteTreasure()
+    {
+        if (selectedTreasureIndex < 0 || selectedTreasureIndex >= workingPins.Count)
+            return;
+
+        string treasureName = workingPins[selectedTreasureIndex].name;
+        workingPins.RemoveAt(selectedTreasureIndex);
+
+        // Refresh preview pins
+        RedrawPreviewPins();
+        UpdateNewPinCountText();
+        UpdateEditPinCountText();
+
+        SetStatus($"✓ Treasure '{treasureName}' deleted!");
+        CloseTreasureEditor();
+        Debug.Log($"[CreatorMapController] Deleted treasure {selectedTreasureIndex}: {treasureName}");
+    }
+
+    private void CloseTreasureEditor()
+    {
+        if (treasureEditorPanel != null)
+            treasureEditorPanel.SetActive(false);
+
+        selectedTreasureIndex = -1;
+        treasureNameInput.text = "";
+    }
+
+    private void OpenCheckpointEditor()
+    {
+        if (workingPins == null || workingPins.Count == 0)
+        {
+            SetStatus("⚠️ No treasures to edit. Place pins first.");
+            return;
+        }
+
+        if (checkpointEditorPanel == null)
+        {
+            Debug.LogError("[CreatorMapController] Checkpoint editor panel not assigned!");
+            return;
+        }
+
+        if (checkpointEditor == null)
+        {
+            Debug.LogError("[CreatorMapController] Checkpoint editor controller not assigned!");
+            return;
+        }
+
+
+        checkpointEditorPanel.SetActive(true);
+        checkpointEditor.LoadCheckpoints(workingPins, OnCheckpointEditorSaved);
+        SetStatus("Editing checkpoints... Place, edit, delete checkpoints or add challenges.");
+    }
+
+    private void OnCheckpointEditorSaved(List<TreasureManagerGPS_Multiplayer.TreasureData> editedTreasures)
+    {
+        workingPins = editedTreasures;
+        RedrawPreviewPins();
+        UpdateNewPinCountText();
+        UpdateEditPinCountText();
+        SetStatus($"✓ {workingPins.Count} checkpoints updated");
+        Debug.Log("[CreatorMapController] Checkpoints updated from editor");
+    }
+
+    private void OnCheckpointEditorClosed()
+    {
+        // Get the edited treasures from checkpoint editor
+        workingPins = checkpointEditor.GetEditedTreasures();
+        RedrawPreviewPins();
+        UpdateNewPinCountText();
+        UpdateEditPinCountText();
+
+        // Make sure editor panel is hidden
+        if (checkpointEditorPanel != null)
+            checkpointEditorPanel.SetActive(false);
+
+        SetStatus($"✓ Updated {workingPins.Count} checkpoints");
+        Debug.Log("[CreatorMapController] Checkpoint editor closed, treasures updated");
+    }
+
+    private void SaveCheckpointEditsToSet()
+    {
+        if (string.IsNullOrEmpty(editingSetId) || !loadedSets.ContainsKey(editingSetId))
+        {
+            SetStatus("⚠️ No set selected");
+            return;
+        }
+
+        if (workingPins == null || workingPins.Count == 0)
+        {
+            SetStatus("⚠️ No checkpoints to save");
+            return;
+        }
+
+        saveCheckpointEditsButton.interactable = false;
+        SetStatus("Saving checkpoints to Firebase...");
+
+        // Build the treasures array for Firebase
+        var treasuresList = new List<Dictionary<string, object>>();
+
+        foreach (var treasure in workingPins)
+        {
+            var treasureData = new Dictionary<string, object>
+        {
+            { "name", treasure.name },
+            { "lat", treasure.lat },
+            { "lon", treasure.lon },
+            { "points", treasure.points }
+        };
+
+            // Include challenge if exists
+            if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
+            {
+                var challengeData = new Dictionary<string, object>
+            {
+                { "type", (int)treasure.challenge.type },
+                { "bonusPoints", treasure.challenge.bonusPoints },
+                { "maxAttempts", treasure.challenge.maxAttempts },
+                { "timeLimitSeconds", treasure.challenge.timeLimitSeconds },
+                { "minigameId", treasure.challenge.minigameId ?? "" }
+            };
+
+                // MCQ options
+                if (treasure.challenge.type == ChallengeType.MCQ && treasure.challenge.options != null)
+                {
+                    challengeData["question"] = treasure.challenge.question ?? "";
+                    var optionsData = new List<object>();
+
+                    foreach (var option in treasure.challenge.options)
+                    {
+                        optionsData.Add(new Dictionary<string, object>
+                    {
+                        { "text", option.text },
+                        { "isCorrect", option.isCorrect }
+                    });
+                    }
+                    challengeData["options"] = optionsData;
+                }
+
+                treasureData["challenge"] = challengeData;
+            }
+
+            treasuresList.Add(treasureData);
+        }
+
+        // Update Firebase
+        var updateData = new Dictionary<string, object>
+    {
+        { "treasures", treasuresList }
+    };
+
+        dbRef.Child("treasureSets").Child(editingSetId).UpdateChildrenAsync(updateData)
+            .ContinueWithOnMainThread(task =>
+            {
+                saveCheckpointEditsButton.interactable = true;
+
+                if (task.IsFaulted)
+                {
+                    SetStatus("❌ Firebase update failed");
+                    Debug.LogError("[CreatorMapController] " + task.Exception);
+                    return;
+                }
+
+                // Update local data
+                loadedSets[editingSetId].treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins);
+
+                // Refresh map
+                if (setMapPins.ContainsKey(editingSetId))
+                {
+                    foreach (var p in setMapPins[editingSetId]) Destroy(p);
+                    setMapPins.Remove(editingSetId);
+                }
+                SpawnPinsForSet(loadedSets[editingSetId]);
+
+                SetStatus($"✅ Saved {workingPins.Count} checkpoints to Firebase!");
+                Debug.Log($"[CreatorMapController] ✅ {workingPins.Count} treasures updated in Firebase");
+            });
+    }
+
+
 
     #endregion
 
@@ -847,16 +1137,19 @@ public class CreatorMapController : MonoBehaviour
         var img = pin.GetComponent<Image>();
         if (img != null) img.color = Color.yellow;
 
+        // Add clickable button for editing
         var btn = pin.GetComponent<Button>() ?? pin.AddComponent<Button>();
         int capturedIndex = workingPins.Count - 1;
         btn.onClick.AddListener(() =>
         {
-            challengeConfig.Show(
-                capturedIndex,
-                workingPins[capturedIndex].challenge,
-                OnChallengeSaved
-            );
+            // Open challenge editor
+            if (challengeConfig != null)
+                challengeConfig.Show(capturedIndex, workingPins[capturedIndex].challenge, OnChallengeSaved);
         });
+
+        // Long press or right-click to edit treasure details
+        var longPressHandler = pin.AddComponent<LongPressHandler>();
+        longPressHandler.OnLongPress += () => OpenTreasureEditor(capturedIndex);
 
         previewPinObjects.Add(pin);
         UpdatePinBadge(pin, treasure.challenge);
@@ -878,6 +1171,32 @@ public class CreatorMapController : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     #region Helpers
+
+    public class LongPressHandler : MonoBehaviour
+    {
+        private float holdTime = 0f;
+        private const float LONG_PRESS_TIME = 0.5f;
+
+        public delegate void LongPressDelegate();
+        public event LongPressDelegate OnLongPress;
+
+        private void Update()
+        {
+            if (Input.GetMouseButton(0))
+            {
+                holdTime += Time.deltaTime;
+                if (holdTime >= LONG_PRESS_TIME)
+                {
+                    OnLongPress?.Invoke();
+                    holdTime = 0f;
+                }
+            }
+            else if (Input.GetMouseButtonUp(0))
+            {
+                holdTime = 0f;
+            }
+        }
+    }
 
     private void CloseAllPanels()
     {

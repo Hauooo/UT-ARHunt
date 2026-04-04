@@ -42,8 +42,8 @@ public class OSMTileLoader : MonoBehaviour
         int centerY = LatToTileY(centerLat, zoom);
 
         // Use enough tiles to cover the full screen even if not square
-        int halfX = Mathf.CeilToInt((mapWidth / tileSize) / 2) + 1;
-        int halfY = Mathf.CeilToInt((mapHeight / tileSize) / 2) + 1;
+        int halfX = Mathf.CeilToInt((mapWidth / tileSize) / 2);
+        int halfY = Mathf.CeilToInt((mapHeight / tileSize) / 2);
 
         for (int dx = -halfX; dx <= halfX; dx++)
         {

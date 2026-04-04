@@ -13,15 +13,17 @@ public class LevelBrowserItem : MonoBehaviour
     [SerializeField] private TMP_Text treasureCountText;
     [SerializeField] private TMP_Text playsCountText;
     [SerializeField] private TMP_Text difficultyText;
-    [SerializeField] private Button playButton;
+    [SerializeField] private TMP_Text levelNameText;
+    [SerializeField] private TMP_Text levelInfoText;
+    [SerializeField] private Button selectButton;
 
     private string levelId;
-    private Action<string> onPlayClicked;
+    private Action<string> onSelectClicked;
 
-    public void Setup(LevelBrowserManager.LevelData levelData, Action<string> playCallback)
+    public void Setup(LevelBrowserManager.LevelData levelData, System.Action<string> selectCallback, double distanceInMeters = double.MaxValue)
     {
         levelId = levelData.levelId;
-        onPlayClicked = playCallback;
+        onSelectClicked = selectCallback;  // ← Changed from playCallback to selectCallback
 
         // Set text values
         if (titleText != null)
@@ -39,19 +41,30 @@ public class LevelBrowserItem : MonoBehaviour
         if (difficultyText != null)
             difficultyText.text = $"Difficulty: {levelData.difficulty}";
 
-        // Wire play button
-        if (playButton != null)
+        // Add distance to title
+        string distanceText = distanceInMeters < double.MaxValue
+            ? $" • {distanceInMeters:F1}m away"
+            : "";
+
+        if (levelNameText != null)
+            levelNameText.text = levelData.name + distanceText;
+
+        if (levelInfoText != null)
+            levelInfoText.text = $"By {levelData.creatorName}\n{levelData.treasureCount} treasures • {levelData.difficulty}\n👁 {levelData.plays} • ⭐ {levelData.rating}";
+
+        // Wire select button
+        if (selectButton != null)  // ← Changed from playButton to selectButton
         {
-            playButton.onClick.RemoveAllListeners();
-            playButton.onClick.AddListener(OnPlayButtonClicked);
+            selectButton.onClick.RemoveAllListeners();
+            selectButton.onClick.AddListener(OnSelectButtonClicked);  // ← Changed method name
         }
 
         Debug.Log($"[LevelItem] Setup level: {levelData.name}");
     }
 
-    private void OnPlayButtonClicked()
+    private void OnSelectButtonClicked()  // ← Changed from OnPlayButtonClicked
     {
-        Debug.Log($"[LevelItem] Play button clicked for level: {levelId}");
-        onPlayClicked?.Invoke(levelId);
+        Debug.Log($"[LevelItem] Select button clicked for level: {levelId}");
+        onSelectClicked?.Invoke(levelId);
     }
 }

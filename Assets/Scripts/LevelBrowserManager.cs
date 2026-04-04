@@ -4,16 +4,19 @@ using TMPro;
 using Firebase.Database;
 using Firebase.Extensions;
 using System.Collections.Generic;
+using System.Linq;
 
 /// <summary>
 /// Allows players to browse and play uploaded levels
+/// Sorted by proximity to user's location
 /// </summary>
 public class LevelBrowserManager : MonoBehaviour
 {
     [Header("UI References")]
     [SerializeField] private GameObject levelBrowserPanel;
-    [SerializeField] private Transform levelListContent;  // ← The parent transform where items go
-    [SerializeField] private GameObject levelItemPrefab;  // ← The prefab to instantiate
+    [SerializeField] private Transform levelListContent;
+    [SerializeField] private GameObject levelItemPrefab;
+    [SerializeField] private GameObject pinPrefab;
     [SerializeField] private Button refreshButton;
     [SerializeField] private TMP_Text feedbackText;
     [SerializeField] private Button backButton;
@@ -23,9 +26,23 @@ public class LevelBrowserManager : MonoBehaviour
     private string firebaseDatabaseUrl =
         "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
+    [Header("Preview Panel")]
+    [SerializeField] private GameObject previewPanel;
+    [SerializeField] private OSMTileLoader previewTileLoader;
+    [SerializeField] private RectTransform previewMapContainer;
+    [SerializeField] private GameObject previewPinPrefab;
+    [SerializeField] private RectTransform previewPinsLayer;
+    [SerializeField] private Button playLevelButton;
+    [SerializeField] private Button closePreviewButton;
+    [SerializeField] private TMP_Text previewLevelNameText;
+    [SerializeField] private TMP_Text previewTreasureCountText;
+
+
     private DatabaseReference dbRef;
+    private LocationManager locationManager;
     private Dictionary<string, LevelData> availableLevels = new Dictionary<string, LevelData>();
     private bool isFirebaseReady = false;
+    private string selectedLevelId;
 
     [System.Serializable]
     public class LevelData
@@ -38,13 +55,54 @@ public class LevelBrowserManager : MonoBehaviour
         public int plays;
         public int rating;
         public string difficulty;
+        public double firstTreasureLat;
+        public double firstTreasureLon;
     }
 
     private void Start()
     {
+        locationManager = LocationManager.Instance;
         SetupButtons();
         SetupLevelListLayout();
         InitializeFirebaseWithDelay();
+    }
+
+    private void SetupButtons()
+    {
+        if (refreshButton != null)
+        {
+            refreshButton.onClick.RemoveAllListeners();
+            refreshButton.onClick.AddListener(LoadLevels);
+            Debug.Log("[LevelBrowser] Refresh button setup");
+        }
+
+        if (backButton != null)
+        {
+            backButton.onClick.RemoveAllListeners();
+            backButton.onClick.AddListener(ClosePanel);
+            Debug.Log("[LevelBrowser] Back button setup");
+        }
+
+        if (playLevelButton != null)
+        {
+            playLevelButton.onClick.RemoveAllListeners();
+            playLevelButton.onClick.AddListener(() =>
+            {
+                if (selectedLevelId != null)
+                {
+                    ClosePreview();
+                    OnPlayLevelClicked(selectedLevelId);
+                }
+            });
+            Debug.Log("[LevelBrowser] Play button setup");
+        }
+
+        if (closePreviewButton != null)
+        {
+            closePreviewButton.onClick.RemoveAllListeners();
+            closePreviewButton.onClick.AddListener(ClosePreview);
+            Debug.Log("[LevelBrowser] Close preview button setup");
+        }
     }
 
     private void InitializeFirebaseWithDelay()
@@ -64,23 +122,6 @@ public class LevelBrowserManager : MonoBehaviour
         {
             Debug.LogError("[LevelBrowser] Failed to init Firebase: " + ex);
             isFirebaseReady = false;
-        }
-    }
-
-    private void SetupButtons()
-    {
-        if (refreshButton != null)
-        {
-            refreshButton.onClick.RemoveAllListeners();
-            refreshButton.onClick.AddListener(LoadLevels);
-            Debug.Log("[LevelBrowser] Refresh button setup");
-        }
-
-        if (backButton != null)
-        {
-            backButton.onClick.RemoveAllListeners();
-            backButton.onClick.AddListener(ClosePanel);
-            Debug.Log("[LevelBrowser] Back button setup");
         }
     }
 
@@ -108,9 +149,6 @@ public class LevelBrowserManager : MonoBehaviour
         Debug.Log("[LevelBrowser] Level browser closed");
     }
 
-    /// <summary>
-    /// Setup the layout for the level list
-    /// </summary>
     private void SetupLevelListLayout()
     {
         if (levelListContent == null)
@@ -119,7 +157,6 @@ public class LevelBrowserManager : MonoBehaviour
             return;
         }
 
-        // Check if VerticalLayoutGroup exists
         VerticalLayoutGroup layoutGroup = levelListContent.GetComponent<VerticalLayoutGroup>();
         if (layoutGroup == null)
         {
@@ -127,11 +164,10 @@ public class LevelBrowserManager : MonoBehaviour
             Debug.Log("[LevelBrowser] Added VerticalLayoutGroup to levelListContent");
         }
 
-        // Configure layout
         layoutGroup.childForceExpandHeight = false;
         layoutGroup.childForceExpandWidth = true;
-        layoutGroup.spacing = 15f;  // Space between items
-        layoutGroup.padding = new RectOffset(10, 10, 10, 10);  // Padding around items
+        layoutGroup.spacing = 15f;
+        layoutGroup.padding = new RectOffset(10, 10, 10, 10);
 
         Debug.Log("[LevelBrowser] Level list layout configured");
     }
@@ -148,7 +184,6 @@ public class LevelBrowserManager : MonoBehaviour
         ShowFeedback("Loading levels...");
         Debug.Log("[LevelBrowser] Starting to load levels...");
 
-        // Clear old list
         foreach (Transform child in levelListContent)
         {
             Debug.Log($"[LevelBrowser] Destroying old item: {child.name}");
@@ -157,7 +192,6 @@ public class LevelBrowserManager : MonoBehaviour
 
         availableLevels.Clear();
 
-        // Fetch all levels
         dbRef.Child("levels")
              .GetValueAsync()
              .ContinueWithOnMainThread(task =>
@@ -176,7 +210,16 @@ public class LevelBrowserManager : MonoBehaviour
                      return;
                  }
 
+                 // Get user's current location
+                 double userLat = locationManager?.Latitude ?? 0;
+                 double userLon = locationManager?.Longitude ?? 0;
+                 bool hasUserLocation = userLat != 0 && userLon != 0;
+
+                 Debug.Log($"[LevelBrowser] User location: ({userLat:F4}, {userLon:F4}), HasLocation: {hasUserLocation}");
+
+                 var levelDataList = new List<(LevelData data, double distance)>();
                  int levelCount = 0;
+
                  foreach (var levelSnapshot in task.Result.Children)
                  {
                      try
@@ -185,9 +228,21 @@ public class LevelBrowserManager : MonoBehaviour
                          if (levelData != null)
                          {
                              availableLevels[levelSnapshot.Key] = levelData;
-                             CreateLevelItem(levelData);
+
+                             // Calculate distance to first treasure
+                             double distance = double.MaxValue;
+                             if (hasUserLocation && levelData.firstTreasureLat != 0 && levelData.firstTreasureLon != 0)
+                             {
+                                 distance = CalculateDistance(userLat, userLon, levelData.firstTreasureLat, levelData.firstTreasureLon);
+                                 Debug.Log($"[LevelBrowser] Level '{levelData.name}' - Distance: {distance:F1}m");
+                             }
+                             else if (!hasUserLocation)
+                             {
+                                 Debug.LogWarning("[LevelBrowser] No user location available - cannot calculate distance");
+                             }
+
+                             levelDataList.Add((levelData, distance));
                              levelCount++;
-                             Debug.Log($"[LevelBrowser] Added level: {levelData.name}");
                          }
                      }
                      catch (System.Exception ex)
@@ -196,9 +251,154 @@ public class LevelBrowserManager : MonoBehaviour
                      }
                  }
 
-                 ShowFeedback($"Loaded {levelCount} levels");
-                 Debug.Log($"[LevelBrowser] Successfully loaded {levelCount} levels");
+                 // Sort by distance (closest first)
+                 levelDataList.Sort((a, b) => a.distance.CompareTo(b.distance));
+
+                 // Create level items in sorted order
+                 foreach (var (levelData, distance) in levelDataList)
+                 {
+                     CreateLevelItem(levelData, distance);
+                 }
+
+                 ShowFeedback($"Loaded {levelCount} levels - sorted by proximity");
+                 Debug.Log($"[LevelBrowser] Successfully loaded and sorted {levelCount} levels by distance");
              });
+    }
+
+
+    /// <summary>
+    /// Open preview panel showing where the level starts
+    /// </summary>
+    private void ShowLevelPreview(LevelData levelData)
+    {
+        if (previewPanel == null)
+        {
+            Debug.LogError("[LevelBrowser] previewPanel not assigned!");
+            return;
+        }
+
+        previewPanel.SetActive(true);
+
+        // Update preview header
+        if (previewLevelNameText != null)
+            previewLevelNameText.text = levelData.name;
+
+        if (previewTreasureCountText != null)
+            previewTreasureCountText.text = $"{levelData.treasureCount} treasures • {levelData.difficulty}";
+
+        // Clear old preview pins
+        if (previewPinsLayer != null)
+        {
+            foreach (Transform child in previewPinsLayer)
+                Destroy(child.gameObject);
+        }
+
+        ShowFeedback($"Loading preview for: {levelData.name}");
+        Debug.Log($"[LevelBrowser] Opening preview for: {levelData.name}");
+
+        dbRef.Child("levels").Child(levelData.levelId).Child("treasures")
+             .GetValueAsync()
+             .ContinueWithOnMainThread(task =>
+             {
+                 if (task.IsFaulted || !task.Result.Exists)
+                 {
+                     ShowFeedback("No treasures to preview");
+                     Debug.LogWarning("[LevelBrowser] No treasures in preview");
+                     return;
+                 }
+
+                 // Get first treasure as start location
+                 double startLat = 0;
+                 double startLon = 0;
+                 bool foundFirst = false;
+                 int treasureCount = 0;
+
+                 foreach (var treasureSnapshot in task.Result.Children)
+                 {
+                     try
+                     {
+                         double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
+                         double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
+                         string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
+
+                         if (!foundFirst)
+                         {
+                             startLat = lat;
+                             startLon = lon;
+                             foundFirst = true;
+                         }
+
+                         treasureCount++;
+                     }
+                     catch (System.Exception ex)
+                     {
+                         Debug.LogWarning("[LevelBrowser] Error parsing treasure in preview: " + ex);
+                     }
+                 }
+
+                 if (foundFirst && previewTileLoader != null && previewMapContainer != null && previewPinsLayer != null)
+                 {
+                     // Center preview map on start location
+                     previewTileLoader.CenterMapOn(startLat, startLon);
+                     Debug.Log($"[LevelBrowser] Preview map centered on: ({startLat:F4}, {startLon:F4})");
+
+                     // Spawn preview pins
+                     float tileSize = previewMapContainer.rect.width / previewTileLoader.tileGridSize;
+                     int pinCount = 0;
+
+                     foreach (var treasureSnapshot in task.Result.Children)
+                     {
+                         try
+                         {
+                             double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
+                             double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
+                             string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
+
+                             Vector2 offset = previewTileLoader.GpsToPixelOffset(lat, lon, tileSize);
+
+                             GameObject pin = Instantiate(previewPinPrefab ?? pinPrefab, previewPinsLayer);
+                             RectTransform pinRect = pin.GetComponent<RectTransform>();
+                             pinRect.anchoredPosition = offset;
+                             pinRect.sizeDelta = new Vector2(50, 50);
+
+                             var label = pin.GetComponentInChildren<TMP_Text>();
+                             if (label != null)
+                             {
+                                 label.text = name;
+                                 label.color = Color.white;
+                             }
+
+                             // First treasure is GREEN (START), others are BLUE
+                             var img = pin.GetComponent<Image>();
+                             if (img != null)
+                             {
+                                 if (pinCount == 0)
+                                     img.color = new Color(0f, 1f, 0f, 1f); // Green - START
+                                 else
+                                     img.color = new Color(0f, 0.5f, 1f, 1f); // Blue - Other treasures
+                             }
+
+                             pinCount++;
+                             Debug.Log($"[LevelBrowser] Preview pin {pinCount}: {name} (Green=Start, Blue=Others)");
+                         }
+                         catch (System.Exception ex)
+                         {
+                             Debug.LogWarning("[LevelBrowser] Error spawning preview pin: " + ex);
+                         }
+                     }
+
+                     ShowFeedback($"Preview ready: {treasureCount} treasures (Green = Start)");
+                     Debug.Log($"[LevelBrowser] Preview loaded with {pinCount} pins");
+                 }
+             });
+    }
+
+    private void ClosePreview()
+    {
+        if (previewPanel != null)
+            previewPanel.SetActive(false);
+
+        Debug.Log("[LevelBrowser] Preview panel closed");
     }
 
     private LevelData ParseLevelData(DataSnapshot snapshot)
@@ -207,6 +407,21 @@ public class LevelBrowserManager : MonoBehaviour
 
         try
         {
+            // Get first treasure location for distance calculation
+            double firstTreasureLat = 0;
+            double firstTreasureLon = 0;
+
+            if (snapshot.HasChild("treasures"))
+            {
+                var treasures = snapshot.Child("treasures").Children;
+                var firstTreasure = treasures.FirstOrDefault();
+                if (firstTreasure != null)
+                {
+                    firstTreasureLat = double.TryParse(firstTreasure.Child("lat").Value?.ToString(), out double lat) ? lat : 0;
+                    firstTreasureLon = double.TryParse(firstTreasure.Child("lon").Value?.ToString(), out double lon) ? lon : 0;
+                }
+            }
+
             var level = new LevelData
             {
                 levelId = snapshot.Key,
@@ -216,10 +431,12 @@ public class LevelBrowserManager : MonoBehaviour
                 treasureCount = snapshot.HasChild("treasureCount") ? int.TryParse(snapshot.Child("treasureCount").Value?.ToString(), out int count) ? count : 0 : 0,
                 plays = snapshot.HasChild("plays") ? int.TryParse(snapshot.Child("plays").Value?.ToString(), out int plays) ? plays : 0 : 0,
                 rating = snapshot.HasChild("rating") ? int.TryParse(snapshot.Child("rating").Value?.ToString(), out int rating) ? rating : 0 : 0,
-                difficulty = snapshot.HasChild("difficulty") ? snapshot.Child("difficulty").Value?.ToString() ?? "Medium" : "Medium"
+                difficulty = snapshot.HasChild("difficulty") ? snapshot.Child("difficulty").Value?.ToString() ?? "Medium" : "Medium",
+                firstTreasureLat = firstTreasureLat,
+                firstTreasureLon = firstTreasureLon
             };
 
-            Debug.Log($"[LevelBrowser] Parsed level: {level.name} (id: {level.levelId})");
+            Debug.Log($"[LevelBrowser] Parsed level: {level.name} at ({firstTreasureLat:F4}, {firstTreasureLon:F4})");
             return level;
         }
         catch (System.Exception ex)
@@ -229,7 +446,7 @@ public class LevelBrowserManager : MonoBehaviour
         }
     }
 
-    private void CreateLevelItem(LevelData levelData)
+    private void CreateLevelItem(LevelData levelData, double distance = double.MaxValue)
     {
         if (levelItemPrefab == null)
         {
@@ -243,31 +460,51 @@ public class LevelBrowserManager : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[LevelBrowser] Creating item for level: {levelData.name}");
-
         GameObject itemObj = Instantiate(levelItemPrefab, levelListContent);
 
-        // Ensure the item has a LayoutElement for proper sizing
         LayoutElement layoutElement = itemObj.GetComponent<LayoutElement>();
         if (layoutElement == null)
-        {
             layoutElement = itemObj.AddComponent<LayoutElement>();
-        }
 
-        layoutElement.preferredHeight = 120f;  // Height of each level item
-        layoutElement.flexibleWidth = 1f;      // Take full width
+        layoutElement.preferredHeight = 120f;
+        layoutElement.flexibleWidth = 1f;
 
         LevelBrowserItem itemController = itemObj.GetComponent<LevelBrowserItem>();
 
         if (itemController != null)
         {
-            itemController.Setup(levelData, OnPlayLevelClicked);
-            Debug.Log($"[LevelBrowser] Setup item controller for level: {levelData.name}");
+            // When item is clicked, show preview instead of playing directly
+            itemController.Setup(levelData, (levelId) =>
+            {
+                selectedLevelId = levelId;
+                ShowLevelPreview(levelData);
+            }, distance);
+            Debug.Log($"[LevelBrowser] Setup item for level: {levelData.name}");
         }
         else
         {
             Debug.LogError("[LevelBrowser] LevelBrowserItem script not found on prefab!");
         }
+    }
+
+    /// <summary>
+    /// Calculate distance between two GPS coordinates using Haversine formula
+    /// </summary>
+    private double CalculateDistance(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double earthRadius = 6371000; // meters
+
+        double dLat = (lat2 - lat1) * Mathf.Deg2Rad;
+        double dLon = (lon2 - lon1) * Mathf.Deg2Rad;
+
+        double a = Mathf.Sin((float)(dLat / 2)) * Mathf.Sin((float)(dLat / 2)) +
+                   Mathf.Cos((float)(lat1 * Mathf.Deg2Rad)) * Mathf.Cos((float)(lat2 * Mathf.Deg2Rad)) *
+                   Mathf.Sin((float)(dLon / 2)) * Mathf.Sin((float)(dLon / 2));
+
+        double c = 2 * Mathf.Atan2(Mathf.Sqrt((float)a), Mathf.Sqrt((float)(1 - a)));
+        double distanceInMeters = earthRadius * c;
+
+        return distanceInMeters;
     }
 
     private void OnPlayLevelClicked(string levelId)
@@ -370,7 +607,6 @@ public class LevelBrowserManager : MonoBehaviour
                 points = snapshot.HasChild("points") ? int.Parse(snapshot.Child("points").Value?.ToString() ?? "100") : 100
             };
 
-            // Parse challenge if it exists
             if (snapshot.HasChild("challenge"))
             {
                 var challengeSnapshot = snapshot.Child("challenge");
@@ -386,15 +622,14 @@ public class LevelBrowserManager : MonoBehaviour
                     minigameId = challengeSnapshot.Child("minigameId").Value?.ToString() ?? ""
                 };
 
-                // Parse MCQ options ← Changed from ChallengeOption to MCQOption
                 if (challengeType == ChallengeType.MCQ && challengeSnapshot.HasChild("options"))
                 {
                     challenge.question = challengeSnapshot.Child("question").Value?.ToString() ?? "";
-                    challenge.options = new List<MCQOption>();  // ← Changed here
+                    challenge.options = new List<MCQOption>();
 
                     foreach (var optionSnapshot in challengeSnapshot.Child("options").Children)
                     {
-                        challenge.options.Add(new MCQOption  // ← Changed here
+                        challenge.options.Add(new MCQOption
                         {
                             text = optionSnapshot.Child("text").Value?.ToString() ?? "",
                             isCorrect = bool.Parse(optionSnapshot.Child("isCorrect").Value?.ToString() ?? "false")

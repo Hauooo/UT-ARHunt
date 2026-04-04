@@ -64,7 +64,6 @@ public class MyLevelsManager : MonoBehaviour
     private LevelData selectedLevelData;
     private Dictionary<string, LevelData> userLevels = new Dictionary<string, LevelData>();
     private Dictionary<string, List<GameObject>> levelPins = new Dictionary<string, List<GameObject>>();
-    private bool gpsReady = false;
 
     [System.Serializable]
     public class LevelData
@@ -79,15 +78,6 @@ public class MyLevelsManager : MonoBehaviour
         public int rating;
     }
 
-    [System.Serializable]
-    public class TreasureData
-    {
-        public string name;
-        public double lat;
-        public double lon;
-        public int points;
-    }
-
     private void Start()
     {
         if (authManager == null)
@@ -96,15 +86,13 @@ public class MyLevelsManager : MonoBehaviour
         if (menuManager == null)
             menuManager = FindObjectOfType<MenuManager>();
 
-        if (locationManager == null)
-            locationManager = LocationManager.Instance;
+        locationManager = LocationManager.Instance;
 
-        InitializeFirebase();
         SetupButtons();
         SetupLayout();
 
-        // Initialize Firebase with a delay
-        Invoke(nameof(InitializeFirebaseDelayed), 0.5f);
+        // Initialize Firebase with delay
+        Invoke(nameof(InitializeFirebase), 0.5f);
     }
 
     private void InitializeFirebase()
@@ -117,27 +105,8 @@ public class MyLevelsManager : MonoBehaviour
         catch (System.Exception ex)
         {
             Debug.LogError("[MyLevelsManager] Firebase init failed: " + ex);
-        }
-    }
-
-    private void InitializeFirebaseDelayed()
-    {
-        // Wait for GPS to be ready
-        if (locationManager != null && locationManager.Status == LocationManager.LocationStatus.Ready)
-        {
-            gpsReady = true;
-
-            // Center map on user location
-            if (tileLoader != null)
-            {
-                tileLoader.CenterMapOn(locationManager.Latitude, locationManager.Longitude);
-                Debug.Log($"[MyLevelsManager] Map centered on GPS: {locationManager.Latitude}, {locationManager.Longitude}");
-            }
-        }
-        else
-        {
-            // Retry if GPS not ready
-            Invoke(nameof(InitializeFirebaseDelayed), 1f);
+            // Retry after 1 second
+            Invoke(nameof(InitializeFirebase), 1f);
         }
     }
 
@@ -192,19 +161,13 @@ public class MyLevelsManager : MonoBehaviour
 
         // Validate map setup
         if (tileLoader == null)
-        {
             Debug.LogError("[MyLevelsManager] OSMTileLoader not assigned!");
-        }
 
         if (mapContainer == null)
-        {
             Debug.LogError("[MyLevelsManager] mapContainer not assigned!");
-        }
 
         if (pinsLayer == null)
-        {
             Debug.LogError("[MyLevelsManager] pinsLayer not assigned!");
-        }
 
         Debug.Log("[MyLevelsManager] Layout setup ✓");
     }
@@ -214,10 +177,9 @@ public class MyLevelsManager : MonoBehaviour
     /// </summary>
     public void OpenMyLevels()
     {
-        // Validate references
         if (levelsListContent == null)
         {
-            Debug.LogError("[MyLevelsManager] levelsListContent is null! Check Inspector references.");
+            Debug.LogError("[MyLevelsManager] levelsListContent is null!");
             return;
         }
 
@@ -253,6 +215,9 @@ public class MyLevelsManager : MonoBehaviour
     /// <summary>
     /// Load all levels created by current user
     /// </summary>
+    /// <summary>
+    /// Load all levels created by current user
+    /// </summary>
     private void LoadUserLevels()
     {
         if (levelsListContent == null)
@@ -261,10 +226,10 @@ public class MyLevelsManager : MonoBehaviour
             return;
         }
 
-        if (!gpsReady || dbRef == null)
+        if (dbRef == null)
         {
-            ShowFeedback("Initializing map... Please wait");
-            Debug.LogWarning("[MyLevelsManager] GPS/Firebase not ready yet");
+            ShowFeedback("Initializing Firebase... Please wait");
+            Debug.LogWarning("[MyLevelsManager] Firebase not ready yet, retrying in 1 second");
             Invoke(nameof(LoadUserLevels), 1f);
             return;
         }
@@ -273,6 +238,7 @@ public class MyLevelsManager : MonoBehaviour
         if (currentUser == null)
         {
             ShowFeedback("Not logged in");
+            Debug.LogError("[MyLevelsManager] No Firebase user");
             return;
         }
 
@@ -311,7 +277,6 @@ public class MyLevelsManager : MonoBehaviour
                  {
                      try
                      {
-                         // Only show levels created by current user
                          if (levelSnapshot.HasChild("creatorName"))
                          {
                              string levelCreator = levelSnapshot.Child("creatorName").Value?.ToString();
@@ -391,7 +356,6 @@ public class MyLevelsManager : MonoBehaviour
         layoutElement.preferredHeight = 100f;
         layoutElement.flexibleWidth = 1f;
 
-        // Setup button
         Button button = itemObj.GetComponent<Button>();
         if (button != null)
         {
@@ -406,6 +370,7 @@ public class MyLevelsManager : MonoBehaviour
 
         Debug.Log($"[MyLevelsManager] Created item for level: {levelData.name}");
     }
+
     /// <summary>
     /// Select a level to view on map
     /// </summary>
@@ -414,7 +379,6 @@ public class MyLevelsManager : MonoBehaviour
         selectedLevelId = levelData.levelId;
         selectedLevelData = levelData;
 
-        // Update UI
         if (levelNameText != null)
             levelNameText.text = levelData.name;
         if (treasureCountText != null)
@@ -424,11 +388,9 @@ public class MyLevelsManager : MonoBehaviour
         if (creatorText != null)
             creatorText.text = $"Created by: {levelData.creatorName}";
 
-        // Enable action buttons
         if (editButton != null) editButton.interactable = true;
         if (deleteButton != null) deleteButton.interactable = true;
 
-        // Load treasures on map
         LoadLevelOnMap(levelData.levelId);
 
         ShowFeedback($"Selected: {levelData.name}");
@@ -436,33 +398,11 @@ public class MyLevelsManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Center map on the first treasure in the level
+    /// Load level treasures and display on OSM map
     /// </summary>
-    private void CenterMapOnLevel(string levelId)
-    {
-        if (tileLoader == null || dbRef == null) return;
-
-        dbRef.Child("levels").Child(levelId).Child("treasures")
-             .LimitToFirst(1)
-             .GetValueAsync()
-             .ContinueWithOnMainThread(task =>
-             {
-                 if (task.IsFaulted || !task.Result.Exists) return;
-
-                 foreach (var treasureSnapshot in task.Result.Children)
-                 {
-                     double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
-                     double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
-
-                     if (lat != 0 && lon != 0)
-                     {
-                         tileLoader.CenterMapOn(lat, lon);
-                         Debug.Log($"[MyLevelsManager] Map centered on first treasure: ({lat}, {lon})");
-                     }
-                 }
-             });
-    }
-
+    /// <summary>
+    /// Load level treasures and display on OSM map
+    /// </summary>
     /// <summary>
     /// Load level treasures and display on OSM map
     /// </summary>
@@ -474,7 +414,7 @@ public class MyLevelsManager : MonoBehaviour
             return;
         }
 
-        // Clear old pins for this level
+        // Clear old pins
         if (levelPins.ContainsKey(levelId))
         {
             foreach (var pin in levelPins[levelId])
@@ -483,6 +423,8 @@ public class MyLevelsManager : MonoBehaviour
         }
 
         if (dbRef == null) return;
+
+        ShowFeedback("Loading map...");
 
         dbRef.Child("levels").Child(levelId).Child("treasures")
              .GetValueAsync()
@@ -494,56 +436,58 @@ public class MyLevelsManager : MonoBehaviour
                      return;
                  }
 
+                 // Get first treasure to center map
+                 double centerLat = 0;
+                 double centerLon = 0;
+                 bool foundFirst = false;
+
+                 foreach (var treasureSnapshot in task.Result.Children)
+                 {
+                     if (!foundFirst)
+                     {
+                         centerLat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
+                         centerLon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
+                         foundFirst = true;
+
+                         // Center map on first treasure (same as CreatorScene)
+                         if (tileLoader != null && centerLat != 0 && centerLon != 0)
+                         {
+                             tileLoader.CenterMapOn(centerLat, centerLon);
+                             Debug.Log($"[MyLevelsManager] Map centered on: ({centerLat}, {centerLon})");
+                         }
+                         break;
+                     }
+                 }
+
+                 // Calculate tileSize exactly like CreatorScene
+                 float tileSize = mapContainer.rect.width / tileLoader.tileGridSize;
+
                  levelPins[levelId] = new List<GameObject>();
-
-                 // Force canvas update to get correct map container size
-                 Canvas.ForceUpdateCanvases();
-
-                 float mapWidth = mapContainer.rect.width;
-                 float mapHeight = mapContainer.rect.height;
-
-                 // Calculate tile size the same way as OSMTileLoader
-                 int safeGridSize = Mathf.Max(1, tileLoader.tileGridSize);
-                 float tileSize = Mathf.Max(mapWidth, mapHeight) / safeGridSize;
-
-                 Debug.Log($"[MyLevelsManager] Map size: {mapWidth}x{mapHeight}, TileSize: {tileSize}");
-
                  int count = 0;
 
                  foreach (var treasureSnapshot in task.Result.Children)
                  {
                      try
                      {
-                         double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0.5;
-                         double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0.5;
+                         double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
+                         double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
                          string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
                          int points = int.TryParse(treasureSnapshot.Child("points").Value?.ToString(), out int p) ? p : 100;
 
-                         // Convert GPS to pixel offset using OSMTileLoader
+                         // Use EXACT same method as CreatorScene's SpawnPinsForSet()
                          Vector2 offset = tileLoader.GpsToPixelOffset(lat, lon, tileSize);
 
-                         // Instantiate pin on map
                          GameObject pin = Instantiate(pinPrefab, pinsLayer);
-                         RectTransform pinRect = pin.GetComponent<RectTransform>();
-                         pinRect.anchoredPosition = offset;
+                         pin.GetComponent<RectTransform>().anchoredPosition = offset;
 
-                         // Set label
                          var label = pin.GetComponentInChildren<TMP_Text>();
                          if (label != null)
-                         {
-                             label.text = $"{name}\n({points}pts)";
-                             label.color = Color.white;
-                         }
-
-                         // Set color to match CreatorScene
-                         var img = pin.GetComponent<Image>();
-                         if (img != null)
-                             img.color = new Color(0f, 1f, 0f, 1f); // Green
+                             label.text = name;
 
                          levelPins[levelId].Add(pin);
                          count++;
 
-                         Debug.Log($"[MyLevelsManager] Treasure '{name}' placed at ({lat:F4}, {lon:F4}) -> offset ({offset.x}, {offset.y})");
+                         Debug.Log($"[MyLevelsManager] Treasure '{name}' at GPS({lat:F4}, {lon:F4}) -> offset({offset.x:F0}, {offset.y:F0})");
                      }
                      catch (System.Exception ex)
                      {
@@ -552,7 +496,7 @@ public class MyLevelsManager : MonoBehaviour
                  }
 
                  ShowFeedback($"Displaying {count} treasures on map");
-                 Debug.Log($"[MyLevelsManager] Level loaded with {count} treasures");
+                 Debug.Log($"[MyLevelsManager] Loaded {count} treasures using tileSize={tileSize}");
              });
     }
 
