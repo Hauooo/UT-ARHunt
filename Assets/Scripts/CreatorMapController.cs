@@ -97,6 +97,12 @@ public class CreatorMapController : MonoBehaviour
     [Header("Challenge Config")]
     [SerializeField] private ChallengeConfigController challengeConfig;
 
+
+    // Collection mode (0 = Free Order, 1 = In Order) waiting to be implemented in UI
+    [Header("Collection Rule")]
+    [SerializeField] private TMP_Dropdown newCollectionModeDropdown;  // ← For New Set
+    [SerializeField] private TMP_Dropdown editCollectionModeDropdown; // ← For Edit Set
+
     // ── Private State ─────────────────────────────────────────────────────
     private GameManager gameManager;
     private LocationManager locationManager;
@@ -110,6 +116,8 @@ public class CreatorMapController : MonoBehaviour
     private Dictionary<string, List<GameObject>> setMapPins = new();
 
     private string editingSetId = null;
+
+    
 
     // ─────────────────────────────────────────────────────────────────────
 
@@ -200,6 +208,21 @@ public class CreatorMapController : MonoBehaviour
         if (checkpointEditor != null)
         {
             checkpointEditor.SetOnCloseCallback(OnCheckpointEditorClosed);
+        }
+
+        if (newCollectionModeDropdown != null)
+        {
+            newCollectionModeDropdown.ClearOptions();
+            newCollectionModeDropdown.AddOptions(new List<string> { "Free Order", "In Order" });
+            newCollectionModeDropdown.value = 0;
+        }
+
+        // Setup Edit Set collection mode
+        if (editCollectionModeDropdown != null)
+        {
+            editCollectionModeDropdown.ClearOptions();
+            editCollectionModeDropdown.AddOptions(new List<string> { "Free Order", "In Order" });
+            editCollectionModeDropdown.value = 0;
         }
 
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
@@ -352,6 +375,7 @@ public class CreatorMapController : MonoBehaviour
 
     private void SaveNewSet()
     {
+        int mode = newCollectionModeDropdown != null ? newCollectionModeDropdown.value : 0;
         string setName = newSetNameInput.text.Trim();
         if (string.IsNullOrEmpty(setName)) { SetStatus("Please enter a set name."); return; }
         if (workingPins.Count == 0) { SetStatus("Place at least one pin."); return; }
@@ -366,6 +390,7 @@ public class CreatorMapController : MonoBehaviour
             setId = newSetId,
             setName = setName,
             createdBy = AuthManager.Instance.UserId,
+            collectionMode = mode,
             treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
         };
 
@@ -433,6 +458,9 @@ public class CreatorMapController : MonoBehaviour
             setMapPins.Remove(set.setId);
         }
 
+        if (editCollectionModeDropdown != null)
+            editCollectionModeDropdown.value = Mathf.Clamp(set.collectionMode, 0, 1);
+
         SetStatus($"Editing '{set.setName}'. Tap a pin to set its challenge, or place new pins.");
 
         if (workingPins.Count > 0 && challengeConfig != null)
@@ -441,6 +469,7 @@ public class CreatorMapController : MonoBehaviour
 
     private void SaveEditedSet()
     {
+        int mode = editCollectionModeDropdown != null ? editCollectionModeDropdown.value : 0;
         if (string.IsNullOrEmpty(editingSetId)) return;
 
         string setName = editSetNameInput.text.Trim();
@@ -450,17 +479,19 @@ public class CreatorMapController : MonoBehaviour
         editSaveButton.interactable = false;
         SetStatus("Saving changes...");
 
+        var existingSet = loadedSets[editingSetId];
         var updatedSet = new TreasureSetData
         {
             setId = editingSetId,
-            setName = setName,
-            createdBy = AuthManager.Instance.UserId,
+            setName = existingSet.setName,
+            createdBy = existingSet.createdBy,
+            collectionMode = mode,
             treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
         };
 
         dbRef.Child("treasureSets").Child(editingSetId)
-            .SetRawJsonValueAsync(JsonUtility.ToJson(updatedSet))
-            .ContinueWithOnMainThread(task =>
+        .SetRawJsonValueAsync(JsonUtility.ToJson(updatedSet))
+                .ContinueWithOnMainThread(task =>
             {
                 editSaveButton.interactable = true;
                 if (task.IsFaulted) { SetStatus("Update failed."); return; }
@@ -533,6 +564,7 @@ public class CreatorMapController : MonoBehaviour
         SetStatus($"✓ Treasure '{newName}' updated!");
         CloseTreasureEditor();
         Debug.Log($"[CreatorMapController] Saved treasure {selectedTreasureIndex}: {newName}");
+        RefreshAllPinsOnMap(); // <-- ensure map pins also reflect changes
     }
 
     private void DeleteTreasure()
@@ -564,38 +596,33 @@ public class CreatorMapController : MonoBehaviour
 
     private void OpenCheckpointEditor()
     {
-        if (workingPins == null || workingPins.Count == 0)
+        if (string.IsNullOrEmpty(editingSetId) || !loadedSets.ContainsKey(editingSetId))
         {
-            SetStatus("⚠️ No treasures to edit. Place pins first.");
+            SetStatus("⚠️ No set selected in Edit mode");
             return;
         }
 
-        if (checkpointEditorPanel == null)
-        {
-            Debug.LogError("[CreatorMapController] Checkpoint editor panel not assigned!");
-            return;
-        }
-
-        if (checkpointEditor == null)
-        {
-            Debug.LogError("[CreatorMapController] Checkpoint editor controller not assigned!");
-            return;
-        }
-
+        var selectedSet = loadedSets[editingSetId];
+        workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(selectedSet.treasures);
 
         checkpointEditorPanel.SetActive(true);
         checkpointEditor.LoadCheckpoints(workingPins, OnCheckpointEditorSaved);
-        SetStatus("Editing checkpoints... Place, edit, delete checkpoints or add challenges.");
+
+        SetStatus($"Editing checkpoints for '{selectedSet.setName}'");
     }
 
     private void OnCheckpointEditorSaved(List<TreasureManagerGPS_Multiplayer.TreasureData> editedTreasures)
     {
-        workingPins = editedTreasures;
+        workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(editedTreasures);
+        RefreshAllPinsOnMap();
         RedrawPreviewPins();
         UpdateNewPinCountText();
         UpdateEditPinCountText();
+
         SetStatus($"✓ {workingPins.Count} checkpoints updated");
         Debug.Log("[CreatorMapController] Checkpoints updated from editor");
+
+        SaveCheckpointEditsToSet(); // <-- required for Firebase persistence
     }
 
     private void OnCheckpointEditorClosed()
@@ -616,6 +643,14 @@ public class CreatorMapController : MonoBehaviour
 
     private void SaveCheckpointEditsToSet()
     {
+        Debug.Log($"[SaveCheckpointEditsToSet] editingSetId={editingSetId}");
+        Debug.Log($"[SaveCheckpointEditsToSet] loadedSets has key? {loadedSets.ContainsKey(editingSetId)}");
+        Debug.Log($"[SaveCheckpointEditsToSet] workingPins count={workingPins?.Count ?? 0}");
+        if (loadedSets.ContainsKey(editingSetId))
+        {
+            Debug.Log($"[SaveCheckpointEditsToSet] target setName={loadedSets[editingSetId].setName}");
+        }
+
         if (string.IsNullOrEmpty(editingSetId) || !loadedSets.ContainsKey(editingSetId))
         {
             SetStatus("⚠️ No set selected");
@@ -631,61 +666,18 @@ public class CreatorMapController : MonoBehaviour
         saveCheckpointEditsButton.interactable = false;
         SetStatus("Saving checkpoints to Firebase...");
 
-        // Build the treasures array for Firebase
-        var treasuresList = new List<Dictionary<string, object>>();
-
-        foreach (var treasure in workingPins)
+        var existingSet = loadedSets[editingSetId];
+        var updatedSet = new TreasureSetData
         {
-            var treasureData = new Dictionary<string, object>
-        {
-            { "name", treasure.name },
-            { "lat", treasure.lat },
-            { "lon", treasure.lon },
-            { "points", treasure.points }
+            setId = editingSetId,
+            setName = existingSet.setName,      // keep current set name
+            createdBy = existingSet.createdBy,  // keep owner
+            collectionMode = existingSet.collectionMode, // keep collection mode
+            treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
         };
 
-            // Include challenge if exists
-            if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
-            {
-                var challengeData = new Dictionary<string, object>
-            {
-                { "type", (int)treasure.challenge.type },
-                { "bonusPoints", treasure.challenge.bonusPoints },
-                { "maxAttempts", treasure.challenge.maxAttempts },
-                { "timeLimitSeconds", treasure.challenge.timeLimitSeconds },
-                { "minigameId", treasure.challenge.minigameId ?? "" }
-            };
-
-                // MCQ options
-                if (treasure.challenge.type == ChallengeType.MCQ && treasure.challenge.options != null)
-                {
-                    challengeData["question"] = treasure.challenge.question ?? "";
-                    var optionsData = new List<object>();
-
-                    foreach (var option in treasure.challenge.options)
-                    {
-                        optionsData.Add(new Dictionary<string, object>
-                    {
-                        { "text", option.text },
-                        { "isCorrect", option.isCorrect }
-                    });
-                    }
-                    challengeData["options"] = optionsData;
-                }
-
-                treasureData["challenge"] = challengeData;
-            }
-
-            treasuresList.Add(treasureData);
-        }
-
-        // Update Firebase
-        var updateData = new Dictionary<string, object>
-    {
-        { "treasures", treasuresList }
-    };
-
-        dbRef.Child("treasureSets").Child(editingSetId).UpdateChildrenAsync(updateData)
+        dbRef.Child("treasureSets").Child(editingSetId)
+            .SetRawJsonValueAsync(JsonUtility.ToJson(updatedSet))
             .ContinueWithOnMainThread(task =>
             {
                 saveCheckpointEditsButton.interactable = true;
@@ -697,19 +689,17 @@ public class CreatorMapController : MonoBehaviour
                     return;
                 }
 
-                // Update local data
-                loadedSets[editingSetId].treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins);
+                loadedSets[editingSetId] = updatedSet;
 
-                // Refresh map
                 if (setMapPins.ContainsKey(editingSetId))
                 {
                     foreach (var p in setMapPins[editingSetId]) Destroy(p);
                     setMapPins.Remove(editingSetId);
                 }
-                SpawnPinsForSet(loadedSets[editingSetId]);
+                SpawnPinsForSet(updatedSet);
 
-                SetStatus($"✅ Saved {workingPins.Count} checkpoints to Firebase!");
-                Debug.Log($"[CreatorMapController] ✅ {workingPins.Count} treasures updated in Firebase");
+                SetStatus($"✅ Saved {workingPins.Count} checkpoints!");
+                Debug.Log($"[CreatorMapController] ✅ Replaced treasure set {editingSetId} with updated checkpoints");
             });
     }
 
@@ -844,7 +834,7 @@ public class CreatorMapController : MonoBehaviour
         }
 
         var selectedSet = GetCurrentlySelectedSet();
-        if (selectedSet == null || selectedSet.treasures.Count == 0)
+        if (selectedSet == null || selectedSet.treasures == null || selectedSet.treasures.Count == 0)
         {
             ShowUploadFeedback("No treasures to upload.");
             return;
@@ -854,10 +844,12 @@ public class CreatorMapController : MonoBehaviour
             uploadConfirmButton.interactable = false;
 
         ShowUploadFeedback("Uploading level...");
-        UploadLevelToFirebase(levelName, description, selectedSet.treasures);
+
+        // Re-upload edited set if already linked, else create new level.
+        UpsertLevelFromSet(selectedSet, levelName, description);
     }
 
-    private void UploadLevelToFirebase(string levelName, string description, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
+    private void UpsertLevelFromSet(TreasureSetData selectedSet, string levelName, string description)
     {
         var user = FirebaseAuth.DefaultInstance?.CurrentUser;
         if (user == null)
@@ -867,7 +859,9 @@ public class CreatorMapController : MonoBehaviour
             return;
         }
 
-        string levelId = dbRef.Child("levels").Push().Key;
+        bool isUpdate = !string.IsNullOrEmpty(selectedSet.linkedLevelId);
+        string levelId = isUpdate ? selectedSet.linkedLevelId : dbRef.Child("levels").Push().Key;
+        bool isInOrder = selectedSet.collectionMode == (int)CollectionMode.InOrder;
 
         var levelData = new Dictionary<string, object>
     {
@@ -876,78 +870,121 @@ public class CreatorMapController : MonoBehaviour
         { "description", description },
         { "createdBy", user.UserId },
         { "creatorName", user.DisplayName ?? "Anonymous" },
-        { "createdAt", ServerValue.Timestamp },
-        { "treasureCount", treasures.Count },
+        { "collectionMode", selectedSet.collectionMode == 1 ? "In Order" : "Free Order" },
+        { "createdAt", isUpdate ? (object)ServerValue.Timestamp : ServerValue.Timestamp },
+        { "updatedAt", ServerValue.Timestamp },
+        { "treasureCount", selectedSet.treasures.Count },
         { "plays", 0 },
         { "rating", 0 },
         { "difficulty", "Medium" }
     };
 
-        dbRef.Child("levels").Child(levelId)
-             .SetValueAsync(levelData)
-             .ContinueWithOnMainThread(task =>
-             {
-                 if (task.IsFaulted || task.IsCanceled)
-                 {
-                     ShowUploadFeedback("Failed to upload level.");
-                     Debug.LogError("[CreatorMapController] Upload failed: " + task.Exception);
-                     if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
-                     return;
-                 }
+        // 1) Save level metadata
+        dbRef.Child("levels").Child(levelId).UpdateChildrenAsync(levelData).ContinueWithOnMainThread(metaTask =>
+        {
+            if (metaTask.IsFaulted || metaTask.IsCanceled)
+            {
+                ShowUploadFeedback("Failed to upload level metadata.");
+                Debug.LogError("[CreatorMapController] Metadata upsert failed: " + metaTask.Exception);
+                if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                return;
+            }
 
-                 Debug.Log($"[CreatorMapController] Level metadata uploaded: {levelId}");
-                 UploadTreasuresToLevel(levelId, treasures);
-             });
+            // 2) Clear old treasures so edited set fully replaces old content
+            dbRef.Child("levels").Child(levelId).Child("treasures").RemoveValueAsync().ContinueWithOnMainThread(clearTask =>
+            {
+                if (clearTask.IsFaulted || clearTask.IsCanceled)
+                {
+                    ShowUploadFeedback("Failed to clear old treasures.");
+                    Debug.LogError("[CreatorMapController] Clear treasures failed: " + clearTask.Exception);
+                    if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                    return;
+                }
+
+                // 3) Upload current treasures
+                UploadTreasuresToLevel(levelId, selectedSet.treasures, isInOrder);
+
+                // 4) Persist link set -> level for future re-uploads
+                if (string.IsNullOrEmpty(selectedSet.setId))
+                    return;
+
+                selectedSet.linkedLevelId = levelId;
+                loadedSets[selectedSet.setId] = selectedSet;
+
+                dbRef.Child("treasureSets").Child(selectedSet.setId).Child("linkedLevelId")
+                    .SetValueAsync(levelId)
+                    .ContinueWithOnMainThread(linkTask =>
+                    {
+                        if (linkTask.IsFaulted)
+                            Debug.LogWarning("[CreatorMapController] linkedLevelId save failed: " + linkTask.Exception);
+                    });
+            });
+        });
     }
 
-    private void UploadTreasuresToLevel(string levelId, List<TreasureManagerGPS_Multiplayer.TreasureData> treasures)
+
+
+    private void UploadTreasuresToLevel(
+    string levelId,
+    List<TreasureManagerGPS_Multiplayer.TreasureData> treasures,
+    bool isInOrder)
     {
-        // First, get the existing treasure keys from the level
         dbRef.Child("levels").Child(levelId).Child("treasures")
             .GetValueAsync()
             .ContinueWithOnMainThread(task =>
             {
-                if (task.IsFaulted)
+                if (task.IsFaulted || task.IsCanceled)
                 {
                     ShowUploadFeedback("Error reading existing treasures");
-                    Debug.LogError("[CreatorMapController] Error: " + task.Exception);
+                    Debug.LogError("[CreatorMapController] Error reading treasures: " + task.Exception);
+                    if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
                     return;
                 }
 
                 var existingKeys = new Dictionary<int, string>();
                 int keyIndex = 0;
 
-                if (task.Result.Exists)
+                if (task.Result != null && task.Result.Exists)
                 {
-                    // Map existing treasure keys
                     foreach (var snapshot in task.Result.Children)
                     {
                         existingKeys[keyIndex] = snapshot.Key;
                         keyIndex++;
-                        Debug.Log($"[CreatorMapController] Found existing treasure key: {snapshot.Key}");
                     }
                 }
 
-                // Now upload treasures using existing keys or new keys
                 int uploadedCount = 0;
-                int totalCount = treasures.Count;
+                int totalCount = treasures?.Count ?? 0;
 
-                for (int i = 0; i < treasures.Count; i++)
+                if (totalCount == 0)
+                {
+                    ShowUploadFeedback("No treasures to upload.");
+                    if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                    return;
+                }
+
+                for (int i = 0; i < totalCount; i++)
                 {
                     var treasure = treasures[i];
 
-                    // Use existing key if available, otherwise generate new one
-                    string treasureId = existingKeys.ContainsKey(i) ? existingKeys[i] : dbRef.Child("levels").Child(levelId).Child("treasures").Push().Key;
+                    if (isInOrder)
+                        treasures[i].orderIndex = i;
+
+                    string treasureId = existingKeys.ContainsKey(i)
+                        ? existingKeys[i]
+                        : dbRef.Child("levels").Child(levelId).Child("treasures").Push().Key;
 
                     var treasureData = new Dictionary<string, object>
                     {
-                    { "name", treasure.name },
+                    { "name", treasure.name ?? $"Treasure #{i + 1}" },
                     { "lat", treasure.lat },
                     { "lon", treasure.lon },
                     { "points", treasure.points }
                     };
 
-                    // Include challenge if it exists
+                    if (isInOrder)
+                        treasureData["orderIndex"] = treasures[i].orderIndex;
+
                     if (treasure.challenge != null && treasure.challenge.type != ChallengeType.None)
                     {
                         var challengeData = new Dictionary<string, object>
@@ -970,47 +1007,46 @@ public class CreatorMapController : MonoBehaviour
                                 {
                                     optionsData.Add(new Dictionary<string, object>
                                     {
-                                    { "text", option.text },
+                                    { "text", option.text ?? "" },
                                     { "isCorrect", option.isCorrect }
                                     });
                                 }
                             }
+
                             challengeData["options"] = optionsData;
                         }
 
                         treasureData["challenge"] = challengeData;
-                        Debug.Log($"[CreatorMapController] Added challenge to treasure: {treasure.name}");
                     }
 
-                    int capturedIndex = i;
                     dbRef.Child("levels").Child(levelId)
-                         .Child("treasures").Child(treasureId)
-                         .SetValueAsync(treasureData)
-                         .ContinueWithOnMainThread(uploadTask =>
-                         {
-                             uploadedCount++;
+                        .Child("treasures").Child(treasureId)
+                        .SetValueAsync(treasureData)
+                        .ContinueWithOnMainThread(uploadTask =>
+                        {
+                            uploadedCount++;
 
-                             if (uploadTask.IsFaulted)
-                             {
-                                 Debug.LogError("[CreatorMapController] Treasure upload failed: " + uploadTask.Exception);
-                             }
-                             else
-                             {
-                                 Debug.Log($"[CreatorMapController] Uploaded treasure {uploadedCount}/{totalCount} with key: {treasureId}");
-                             }
+                            if (uploadTask.IsFaulted || uploadTask.IsCanceled)
+                            {
+                                Debug.LogError("[CreatorMapController] Treasure upload failed: " + uploadTask.Exception);
+                            }
+                            else
+                            {
+                                Debug.Log($"[CreatorMapController] Uploaded treasure {uploadedCount}/{totalCount} (key: {treasureId})");
+                            }
 
-                             if (uploadProgressBar != null)
-                                 uploadProgressBar.value = (float)uploadedCount / totalCount;
+                            if (uploadProgressBar != null)
+                                uploadProgressBar.value = (float)uploadedCount / totalCount;
 
-                             if (uploadedCount >= totalCount)
-                             {
-                                 ShowUploadFeedback($"Level '{levelNameInput.text}' uploaded successfully!");
-                                 Debug.Log($"[CreatorMapController] All treasures uploaded for level: {levelId}");
+                            if (uploadedCount >= totalCount)
+                            {
+                                ShowUploadFeedback($"Level '{levelNameInput.text}' uploaded successfully!");
+                                Debug.Log($"[CreatorMapController] All treasures uploaded for level: {levelId}");
 
-                                 Invoke(nameof(CloseUploadPanel), 2f);
-                                 if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
-                             }
-                         });
+                                Invoke(nameof(CloseUploadPanel), 2f);
+                                if (uploadConfirmButton != null) uploadConfirmButton.interactable = true;
+                            }
+                        });
                 }
             });
     }

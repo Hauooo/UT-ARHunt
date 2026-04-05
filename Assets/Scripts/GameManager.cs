@@ -249,14 +249,18 @@ public class GameManager : MonoBehaviour
         roomRef.Child("hostName").SetValueAsync(hostDisplayName),
         roomRef.Child("selectedSetId").SetValueAsync(treasureSet.setId),
         roomRef.Child("status").SetValueAsync("waiting"),
+        roomRef.Child("collectionMode").SetValueAsync(treasureSet.collectionMode),
+        roomRef.Child("nextTreasureIndex").SetValueAsync(0),
         roomRef.Child("players").Child(hostUid)
             .SetRawJsonValueAsync(JsonUtility.ToJson(new PlayerData(hostDisplayName, 0)))
     };
 
         var gameStateRef = roomRef.Child("gameState");
-        foreach (var treasure in treasureSet.treasures)
+        for (int i = 0; i < treasureSet.treasures.Count; i++)
         {
+            var treasure = treasureSet.treasures[i];
             string liveTreasureKey = gameStateRef.Push().Key;
+
             var liveTreasure = new TreasureManagerGPS_Multiplayer.TreasureData
             {
                 name = treasure.name,
@@ -264,7 +268,8 @@ public class GameManager : MonoBehaviour
                 lon = treasure.lon,
                 points = treasure.points,
                 challenge = treasure.challenge,
-                collectedBy = null
+                collectedBy = null,
+                orderIndex = i // NEW
             };
 
             tasks.Add(gameStateRef.Child(liveTreasureKey)
@@ -519,7 +524,7 @@ public class GameManager : MonoBehaviour
             Debug.LogError("[GameManager] EndGame failed: Firebase not ready.");
             return;
         }
-            dbRef.Child("rooms").Child(CurrentRoomId).Child("status").SetValueAsync("ended");
+            
 
             string roomId = CurrentRoomId;
         var roomRef = dbRef.Child("rooms").Child(roomId);
@@ -746,12 +751,21 @@ private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
 
 #region --- Data Structures ---
 
+public enum  CollectionMode
+{
+    Free = 0,
+    InOrder = 1
+}
+
 [Serializable]
 public class TreasureSetData
 {
     public string setId;
     public string setName;
     public string createdBy;
+    public string linkedLevelId;
+    public int orderIndex;
+    public int collectionMode = (int)CollectionMode.Free;
     public List<TreasureManagerGPS_Multiplayer.TreasureData> treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
 }
 

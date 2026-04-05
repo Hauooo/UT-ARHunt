@@ -20,12 +20,11 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         public double lat;
         public double lon;
         public long points;
+        public int orderIndex; // NEW: sequence index for InOrder mode
 
-        // Note: JsonUtility doesn't serialize Dictionary well, but Firebase will create this map once a player collects.
         public Dictionary<string, bool> collectedBy = new Dictionary<string, bool>();
-        public ChallengeData challenge; // Optional: add challenge data here for future extension
+        public ChallengeData challenge;
 
-        // Constructor for creating new treasures
         public TreasureData() { }
 
         public TreasureData(string name, double lat, double lon, long points)
@@ -34,6 +33,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             this.lat = lat;
             this.lon = lon;
             this.points = points;
+            this.orderIndex = 0;
             this.collectedBy = new Dictionary<string, bool>();
         }
     }
@@ -83,6 +83,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     private bool servicesReady = false;
     private bool initialized = false;
     private bool isCollectInProgress = false;
+
+    // --- Mode Management ---
+    private int roomCollectionMode = (int)CollectionMode.Free; // 0 Free, 1 InOrder
+    private int nextTreasureIndex = 0;
 
     private readonly Dictionary<string, Treasure> localTreasures = new Dictionary<string, Treasure>();
     private string currentTargetKey;
@@ -167,16 +171,33 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         currentRoomId = roomId;
 
-        // Check if we have level treasures from single-player level
+        bool isSinglePlayer = !string.IsNullOrEmpty(roomId) && roomId.StartsWith("-");
+
+        // Record level start timing for this player
+        if (!string.IsNullOrEmpty(authManager?.UserId) && dbRef != null)
+        {
+            DatabaseReference playerRef = isSinglePlayer
+                ? dbRef.Child("levels").Child(roomId).Child("players").Child(authManager.UserId)
+                : dbRef.Child("rooms").Child(roomId).Child("players").Child(authManager.UserId);
+
+            playerRef.Child("startAt").SetValueAsync(ServerValue.Timestamp);
+            playerRef.Child("endAt").RemoveValueAsync();
+            playerRef.Child("timeTakenMs").RemoveValueAsync();
+        }
+
+        
         var gameManager = GameManager.Instance;
         if (gameManager?.CurrentLevelTreasures != null && gameManager.CurrentLevelTreasures.Count > 0)
         {
             Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {gameManager.CurrentLevelTreasures.Count} treasures from level");
+
+            
+            nextTreasureIndex = 0;
+
             InitializeTreasuresFromList(gameManager.CurrentLevelTreasures);
             return;
         }
 
-        // Otherwise, load from Firebase (multiplayer mode)
         LoadTreasuresFromFirebase(roomId);
     }
 
@@ -190,6 +211,23 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading treasures from Firebase for room: {roomId}");
         LogToUI("Loading treasures...");
+
+        dbRef.Child("rooms").Child(roomId).GetValueAsync().ContinueWithOnMainThread(roomTask =>
+        {
+            if (!roomTask.IsFaulted && roomTask.Result.Exists)
+            {
+                var roomSnap = roomTask.Result;
+
+                if (roomSnap.HasChild("collectionMode") &&
+                    int.TryParse(roomSnap.Child("collectionMode").Value?.ToString(), out int mode))
+                    roomCollectionMode = mode;
+
+                if (roomSnap.HasChild("nextTreasureIndex") &&
+                    int.TryParse(roomSnap.Child("nextTreasureIndex").Value?.ToString(), out int idx))
+                    nextTreasureIndex = idx;
+            }
+
+        });
 
         dbRef.Child("rooms").Child(roomId).Child("gameState")
             .GetValueAsync()
@@ -366,20 +404,45 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        DatabaseReference gameStateRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState");
+        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
+        DatabaseReference gameStateRef = roomRef.Child("gameState");
+
         gameStateRef.ChildAdded += HandleTreasureAdded;
         gameStateRef.ChildChanged += HandleTreasureChanged;
 
-        Debug.Log($"[TreasureManager] Listening: rooms/{currentRoomId}/gameState");
+        // NEW: keep order state synced
+        roomRef.Child("nextTreasureIndex").ValueChanged += HandleNextTreasureIndexChanged;
+        roomRef.Child("collectionMode").ValueChanged += HandleCollectionModeChanged;
+
+        Debug.Log($"[TreasureManager] Listening: rooms/{currentRoomId}/gameState + order state");
     }
 
     private void StopListeningForTreasures()
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        DatabaseReference gameStateRef = dbRef.Child("rooms").Child(currentRoomId).Child("gameState");
+        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
+        DatabaseReference gameStateRef = roomRef.Child("gameState");
+
         gameStateRef.ChildAdded -= HandleTreasureAdded;
         gameStateRef.ChildChanged -= HandleTreasureChanged;
+
+        roomRef.Child("nextTreasureIndex").ValueChanged -= HandleNextTreasureIndexChanged;
+        roomRef.Child("collectionMode").ValueChanged -= HandleCollectionModeChanged;
+    }
+
+    private void HandleNextTreasureIndexChanged(object sender, ValueChangedEventArgs args)
+    {
+        if (args.DatabaseError != null || !args.Snapshot.Exists) return;
+        if (int.TryParse(args.Snapshot.Value?.ToString(), out int idx))
+            nextTreasureIndex = idx;
+    }
+
+    private void HandleCollectionModeChanged(object sender, ValueChangedEventArgs args)
+    {
+        if (args.DatabaseError != null || !args.Snapshot.Exists) return;
+        if (int.TryParse(args.Snapshot.Value?.ToString(), out int mode))
+            roomCollectionMode = mode;
     }
 
     private void HandleTreasureAdded(object sender, ChildChangedEventArgs args)
@@ -466,6 +529,14 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         Treasure target = localTreasures[currentTargetKey];
 
+        if (roomCollectionMode == (int)CollectionMode.InOrder && target.data.orderIndex != nextTreasureIndex)
+        {
+            LogToUI($"Collect checkpoint #{nextTreasureIndex + 1} first.");
+            isCollectInProgress = false;
+            if (collectButton != null) collectButton.interactable = true;
+            return;
+        }
+
         // ── NEW: Check if this checkpoint has a challenge ─────────────────────
         bool hasChallenge = target.data.challenge != null
                          && target.data.challenge.type != ChallengeType.None;
@@ -535,6 +606,11 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      // SUCCESS
                      long totalEarned = target.data.points + bonusPoints;
 
+                     if (roomCollectionMode == (int)CollectionMode.InOrder)
+                     {
+                         nextTreasureIndex++;
+                     }
+
                      if (ScoreManager.Instance != null)
                      {
                          ScoreManager.Instance.AddTreasurePoints();
@@ -572,54 +648,110 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      LogToUI($"Treasure collected! +{totalEarned} points");
                      Debug.Log($"[TreasureManager] ✓ Successfully collected '{target.data.name}'!");
 
-                     // ← ADD THIS: Check if any treasures remain
                      Invoke(nameof(CheckForRemainingTreasures), 2f);
                  });
 
             return;
         }
 
-        // MULTIPLAYER PATH
-        DatabaseReference treasureRef = dbRef
-            .Child("rooms").Child(currentRoomId)
-            .Child("gameState").Child(target.key);
+        // MULTIPLAYER PATH (atomic room-level transaction for InOrder safety)
+        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
 
-        bool abortedAlreadyCollected = false;
-        bool abortedMissingNode = false;
+        bool aborted = false;
+        string abortReason = "";
 
-        treasureRef.RunTransaction(mutableData =>
+        roomRef.RunTransaction(mutableData =>
         {
-            if (mutableData.Value == null)
+            if (mutableData.Value is not Dictionary<string, object> roomData)
             {
-                abortedMissingNode = true;
+                aborted = true;
+                abortReason = "Room data missing.";
                 return TransactionResult.Abort();
             }
 
-            if (mutableData.Value is not Dictionary<string, object> data)
-                return TransactionResult.Abort();
+            // Read collection mode + next index
+            long modeLong = 0; // default Free
+            if (roomData.TryGetValue("collectionMode", out object modeObj) && modeObj != null)
+                modeLong = Convert.ToInt64(modeObj);
 
-            Dictionary<string, object> collectedBy;
+            long nextIndexLong = 0;
+            if (roomData.TryGetValue("nextTreasureIndex", out object nextObj) && nextObj != null)
+                nextIndexLong = Convert.ToInt64(nextObj);
 
-            if (data.TryGetValue("collectedBy", out object collectedByObj)
-                && collectedByObj is Dictionary<string, object> existing)
-                collectedBy = existing;
-            else
-                collectedBy = new Dictionary<string, object>();
-
-            if (collectedBy.ContainsKey(myUserId))
+            // Read gameState
+            if (!roomData.TryGetValue("gameState", out object gameStateObj) ||
+                gameStateObj is not Dictionary<string, object> gameState)
             {
-                abortedAlreadyCollected = true;
+                aborted = true;
+                abortReason = "Game state missing.";
                 return TransactionResult.Abort();
+            }
+
+            // Read target treasure node
+            if (!gameState.TryGetValue(target.key, out object treasureObj) ||
+                treasureObj is not Dictionary<string, object> treasureData)
+            {
+                aborted = true;
+                abortReason = "Treasure missing.";
+                return TransactionResult.Abort();
+            }
+
+            // Already collected?
+            bool isCollected = false;
+            if (treasureData.TryGetValue("isCollected", out object isCollectedObj) && isCollectedObj != null)
+            {
+                if (isCollectedObj is bool b) isCollected = b;
+                else bool.TryParse(isCollectedObj.ToString(), out isCollected);
+            }
+
+            if (isCollected)
+            {
+                aborted = true;
+                abortReason = "Already collected.";
+                return TransactionResult.Abort();
+            }
+
+            // InOrder guard (atomic)
+            long orderLong = 0;
+            if (treasureData.TryGetValue("orderIndex", out object orderObj) && orderObj != null)
+                orderLong = Convert.ToInt64(orderObj);
+
+            if (modeLong == (long)CollectionMode.InOrder && orderLong != nextIndexLong)
+            {
+                aborted = true;
+                abortReason = $"Wrong order. Next required: #{nextIndexLong + 1}";
+                return TransactionResult.Abort();
+            }
+
+            // Mark collected
+            Dictionary<string, object> collectedBy;
+            if (treasureData.TryGetValue("collectedBy", out object collectedByObj) &&
+                collectedByObj is Dictionary<string, object> existingCollectedBy)
+            {
+                collectedBy = existingCollectedBy;
+            }
+            else
+            {
+                collectedBy = new Dictionary<string, object>();
             }
 
             collectedBy[myUserId] = true;
-            data["collectedBy"] = collectedBy;
-            data["isCollected"] = true;
+            treasureData["collectedBy"] = collectedBy;
+            treasureData["isCollected"] = true;
 
             if (bonusPoints > 0)
-                data["bonusPoints"] = bonusPoints;
+                treasureData["bonusPoints"] = bonusPoints;
 
-            mutableData.Value = data;
+            gameState[target.key] = treasureData;
+            roomData["gameState"] = gameState;
+
+            // Advance sequence atomically if InOrder
+            if (modeLong == (long)CollectionMode.InOrder)
+            {
+                roomData["nextTreasureIndex"] = nextIndexLong + 1;
+            }
+
+            mutableData.Value = roomData;
             return TransactionResult.Success(mutableData);
 
         }).ContinueWithOnMainThread(task =>
@@ -627,36 +759,23 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             isCollectInProgress = false;
             if (collectButton != null) collectButton.interactable = true;
 
-            if (task.IsFaulted)
+            if (task.IsFaulted || task.IsCanceled)
             {
-                if (abortedAlreadyCollected)
-                {
-                    LogToUI("You already collected this treasure!");
-                    if (collectButton != null)
-                    {
-                        collectButton.gameObject.SetActive(false);
-                        collectButton.interactable = false;
-                    }
-                    return;
-                }
-
-                if (abortedMissingNode)
-                {
-                    LogToUI("Treasure no longer exists.");
-                    if (collectButton != null)
-                    {
-                        collectButton.gameObject.SetActive(false);
-                        collectButton.interactable = false;
-                    }
-                    return;
-                }
-
-                Debug.LogError("Error collecting treasure: " + task.Exception);
                 LogToUI("Collect failed.");
+                Debug.LogError("[TreasureManager] Collect transaction faulted: " + task.Exception);
                 return;
             }
 
-            // SUCCESS - multiplayer
+            if (aborted)
+            {
+                if (!string.IsNullOrEmpty(abortReason))
+                    LogToUI(abortReason);
+                else
+                    LogToUI("Collect rejected.");
+                return;
+            }
+
+            // SUCCESS
             long totalEarned = target.data.points + bonusPoints;
 
             if (ScoreManager.Instance != null)
@@ -679,9 +798,9 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      return TransactionResult.Success(scoreData);
                  });
 
-            Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected!");
+            LogToUI($"Treasure collected! +{totalEarned} points");
+            Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected.");
 
-            // ← ADD THIS: Check if any treasures remain
             Invoke(nameof(CheckForRemainingTreasures), 2f);
         });
     }
@@ -721,6 +840,31 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         CancelInvoke(nameof(UpdateFinderState));
         StopListeningForTreasures();
+
+        if (!string.IsNullOrEmpty(authManager?.UserId) && !string.IsNullOrEmpty(currentRoomId))
+        {
+            var playerRef = dbRef.Child("rooms").Child(currentRoomId).Child("players").Child(authManager.UserId);
+            playerRef.Child("endAt").SetValueAsync(ServerValue.Timestamp);
+
+            // Optional: compute with transaction if startAt exists on client-known path
+            playerRef.RunTransaction(mutable =>
+            {
+                if (mutable.Value is Dictionary<string, object> data &&
+                    data.TryGetValue("startAt", out object sObj) &&
+                    sObj != null)
+                {
+                    long start = Convert.ToInt64(sObj);
+
+                    // Can't read server timestamp directly in same txn as value.
+                    // So store a local fallback from device time:
+                    long endLocal = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    data["timeTakenMs"] = Math.Max(0, endLocal - start);
+                    mutable.Value = data;
+                    return TransactionResult.Success(mutable);
+                }
+                return TransactionResult.Success(mutable);
+            });
+        }
 
         // Load the scoreboard scene
         UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");

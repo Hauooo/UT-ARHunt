@@ -380,7 +380,7 @@ public class CheckpointEditorController : MonoBehaviour
             challengeTypeDropdown.interactable = true;
 
             // Wait a frame to ensure UI has updated, then trigger change event
-            StartCoroutine(TriggerDropdownChange());
+            OnChallengeTypeChanged(challengeTypeDropdown.value);
         }
 
         UpdateStatus($"Configuring challenge for '{treasures[selectedCheckpointIndex].name}'");
