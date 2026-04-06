@@ -18,8 +18,7 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private TMP_Text attemptsText;
     [SerializeField] private TMP_Text resultText;
 
-    [Header("AR MCQ UI")]
-    [SerializeField] private ARMCQPanelController arMcqPanel;
+
 
     [Header("Minigame UI")]
     [SerializeField] private GameObject minigamePanel;
@@ -31,9 +30,6 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private MemoryMatchManager memoryMatchManager;
     [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
 
-    [Header("AR MCQ")]
-    [SerializeField] private ARMCQMinigameController arMcqMinigameController;
-    [SerializeField] private Transform arSpawnCenter; // optional, fallback = camera forward
 
     [Header("Shared")]
     [SerializeField] private Button skipButton;
@@ -48,7 +44,6 @@ public class ChallengeRunner : MonoBehaviour
     private void Awake()
     {
         challengePanel.SetActive(false);
-        if (arMcqPanel != null) arMcqPanel.Hide();
 
         if (skipButton != null)
         {
@@ -94,10 +89,6 @@ public class ChallengeRunner : MonoBehaviour
         {
             case ChallengeType.MCQ:
                 ShowMCQ(challenge); // pure 2D MCQ
-                break;
-
-            case ChallengeType.ARMCQ:
-                ShowARMCQ(challenge); // AR scattered options + ARMCQPanel
                 break;
 
             case ChallengeType.MemoryMatch:
@@ -190,81 +181,14 @@ public class ChallengeRunner : MonoBehaviour
         }
     }
 
-    // ---------------- AR MCQ ----------------
+    
 
-    private void ShowARMCQ(ChallengeData challenge)
-    {
-        if (arMcqMinigameController == null)
-        {
-            Debug.LogError("[ChallengeRunner] ARMCQ controller not assigned!");
-            resultText.text = "AR MCQ is not configured.";
-            return;
-        }
-
-        if (challenge == null || challenge.options == null || challenge.options.Count == 0)
-        {
-            Debug.LogError("[ChallengeRunner] ARMCQ data invalid: options missing.");
-            resultText.text = "Challenge data invalid (no options).";
-            if (arMcqPanel != null) arMcqPanel.SetResult("No options configured for this AR MCQ.");
-            return; // do not call StartMinigame
-        }
-
-        Debug.Log($"[ChallengeRunner] ShowARMCQ start | q='{challenge.question}' | options={(challenge.options == null ? -1 : challenge.options.Count)} | maxAttempts={challenge.maxAttempts}");
-
-        mcqPanel.SetActive(false);
-        minigamePanel.SetActive(false);
-
-        Vector3 center = (arSpawnCenter != null)
-            ? arSpawnCenter.position
-            : (Camera.main != null ? Camera.main.transform.position + Camera.main.transform.forward * 3f : Vector3.zero);
-
-        if (arMcqPanel != null)
-            arMcqPanel.Show(challenge.question, attemptsLeft, OnSkipClicked);
-
-        resultText.text = "Find and tap the correct answer in AR space!";
-        arMcqMinigameController.StartMinigame(challenge, center, OnARMCQResult);
-    }
-
-    private void OnARMCQResult(bool success, int score)
-    {
-        if (!challengeInProgress) return;
-
-        if (success)
-        {
-            if (arMcqPanel != null) arMcqPanel.SetResult("Correct!");
-            resultText.text = "Correct!";
-            OnChallengeComplete(true, score > 0 ? score : currentChallenge.bonusPoints);
-            return;
-        }
-
-        attemptsLeft--;
-        UpdateAttemptsText();
-        if (arMcqPanel != null) arMcqPanel.UpdateAttempts(attemptsLeft);
-
-        if (attemptsLeft <= 0)
-        {
-            if (arMcqPanel != null) arMcqPanel.SetResult("Challenge failed. Try again!");
-            resultText.text = "Challenge failed. Try again!";
-            OnChallengeComplete(false, 0);
-        }
-        else
-        {
-            if (arMcqPanel != null) arMcqPanel.SetResult($"Wrong! {attemptsLeft} attempt(s) left.");
-            resultText.text = $"Wrong! {attemptsLeft} attempt(s) left.";
-
-            Vector3 center = (arSpawnCenter != null)
-                ? arSpawnCenter.position
-                : (Camera.main != null ? Camera.main.transform.position + Camera.main.transform.forward * 3f : Vector3.zero);
-
-            arMcqMinigameController.StartMinigame(currentChallenge, center, OnARMCQResult);
-        }
-    }
+    
 
     // ---------------- Minigames ----------------
 
     private void ShowMinigameLauncher(ChallengeData challenge)
     {
-        if (arMcqPanel != null) arMcqPanel.Hide();
 
         mcqPanel.SetActive(false);
         minigamePanel.SetActive(true);
@@ -346,11 +270,6 @@ public class ChallengeRunner : MonoBehaviour
     {
         if (!challengeInProgress) return;
 
-        if (arMcqMinigameController != null)
-            arMcqMinigameController.StopMinigame();
-
-        if (arMcqPanel != null)
-            arMcqPanel.Hide();
 
         OnChallengeComplete(false, 0);
     }
@@ -370,11 +289,7 @@ public class ChallengeRunner : MonoBehaviour
     {
         yield return new WaitForSeconds(1.5f);
 
-        if (arMcqMinigameController != null)
-            arMcqMinigameController.StopMinigame();
-
-        if (arMcqPanel != null)
-            arMcqPanel.Hide();
+        
 
         challengePanel.SetActive(false);
         mcqPanel.SetActive(false);

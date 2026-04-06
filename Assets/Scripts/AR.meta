@@ -1,7 +1,12 @@
 fileFormatVersion: 2
+<<<<<<<< Updated upstream:Assets/Scripts/AR.meta
 guid: 06f09bc5e5c0fd04994171250dcd3b55
 folderAsset: yes
 DefaultImporter:
+========
+guid: 25c002e61ce9c8b4c8eb0410fe7bdb46
+PrefabImporter:
+>>>>>>>> Stashed changes:Assets/Prefab/AR_MCQ_Option.prefab.meta
   externalObjects: {}
   userData: 
   assetBundleName: 

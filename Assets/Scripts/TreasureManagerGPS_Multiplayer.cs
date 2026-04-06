@@ -106,6 +106,11 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log($"[TreasureManager] statusText assigned: {statusText != null}");
+        Debug.Log($"[TreasureManager] distanceLabel assigned: {distanceLabel != null}");
+        Debug.Log($"[TreasureManager] collectButton assigned: {collectButton != null}");
+        Debug.Log($"[TreasureManager] arrowIndicator assigned: {arrowIndicator != null}");
+
         authManager = AuthManager.Instance;
         locationManager = LocationManager.Instance;
 
@@ -699,7 +704,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                          nextTreasureIndex++;
                      }
 
-                  
+
 
                      dbRef.Child("levels").Child(currentRoomId)
                           .Child("scores").Child(myUserId)
@@ -857,7 +862,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // SUCCESS
             long totalEarned = target.data.points + bonusPoints;
 
-            
+
 
             dbRef.Child("rooms").Child(currentRoomId)
                  .Child("scores").Child(myUserId)
