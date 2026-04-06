@@ -31,6 +31,9 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
 
 
+    [Header("AR MCQ")]
+    [SerializeField] private ArMCQManager arMCQManager;
+
     [Header("Shared")]
     [SerializeField] private Button skipButton;
     [SerializeField] private Button retryButton;
@@ -88,6 +91,10 @@ public class ChallengeRunner : MonoBehaviour
         switch (challenge.type)
         {
             case ChallengeType.MCQ:
+                if (challenge.useARMode && arMCQManager != null)
+                    ShowARMCQ(challenge);
+                else
+                    ShowMCQ(challenge);
                 ShowMCQ(challenge); // pure 2D MCQ
                 break;
 
@@ -154,6 +161,39 @@ public class ChallengeRunner : MonoBehaviour
             answerButtons[i].onClick.RemoveAllListeners();
             answerButtons[i].onClick.AddListener(() => OnAnswerSelected(isCorrect));
         }
+    }
+
+    private void ShowARMCQ(ChallengeData challenge)
+    {
+        mcqPanel.SetActive(false);
+        minigamePanel.SetActive(false);
+
+        // Show the question in the HUD while AR options load
+        questionText.text = challenge.question;
+        UpdateAttemptsText();
+
+        arMCQManager.StartARMCQ(challenge, OnARMCQComplete);
+    }
+
+    private void OnARMCQComplete(bool success, int bonus)
+    {
+        // Fallback: AR unavailable – retry as screen-based MCQ
+        if (ArMCQManager.IsARFallbackResult(success, bonus))
+        {
+            ShowMCQ(currentChallenge);
+            return;
+        }
+
+        if (success)
+        {
+            resultText.text = "✅ Correct!";
+        }
+        else
+        {
+            resultText.text = "❌ Failed. You can skip.";
+        }
+
+        StartCoroutine(DelayedComplete(success, bonus));
     }
 
     private void OnAnswerSelected(bool isCorrect)

@@ -32,6 +32,9 @@ public class ChallengeData
     // ── Minigame fields ────────────────────────────────────────────────
     public string minigameId;             // e.g. "MemoryMatch_Easy"
     public int timeLimitSeconds = 60;     // countdown timer for minigame
+
+    // ── AR mode flag ───────────────────────────────────────────────────
+    public bool useARMode = false;        // if true, MCQ options spawn in AR space
 }
 
 // ── Extend existing TreasureData ─────────────────────────────────────────────
