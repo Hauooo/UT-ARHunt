@@ -57,8 +57,7 @@ public class CheckpointEditorController : MonoBehaviour
 
     private readonly List<string> minigameOptions = new()
     {
-        "MemoryMatch_Easy",
-        "MemoryMatch_Hard",
+        "MemoryMatch",
         "OrderSequence"
     };
 
@@ -544,7 +543,7 @@ public class CheckpointEditorController : MonoBehaviour
 
         ChallengeType resolvedType = id switch
         {
-            "MemoryMatch_Easy" or "MemoryMatch_Hard" => ChallengeType.MemoryMatch,
+            "MemoryMatch" => ChallengeType.MemoryMatch,
             "OrderSequence" => ChallengeType.OrderSequence,
             _ => ChallengeType.MemoryMatch
         };

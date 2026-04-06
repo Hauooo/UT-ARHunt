@@ -92,9 +92,25 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     private readonly Dictionary<string, Treasure> localTreasures = new Dictionary<string, Treasure>();
     private string currentTargetKey;
     private string currentRoomId;
+    private long runStartLocalMs;
+
+    [Header("Quit Confirmation UI")]
+    [SerializeField] private GameObject quitConfirmPanel;
+    [SerializeField] private Button quitConfirmYesButton;
+    [SerializeField] private Button quitConfirmNoButton;
+    [SerializeField] private TMP_Text quitConfirmText;
+
+    // Existing flags
+    private bool suppressResultSave = false;
+    private bool isExitingLevel = false;
 
     private void Start()
     {
+        Debug.Log($"[TreasureManager] statusText assigned: {statusText != null}");
+        Debug.Log($"[TreasureManager] distanceLabel assigned: {distanceLabel != null}");
+        Debug.Log($"[TreasureManager] collectButton assigned: {collectButton != null}");
+        Debug.Log($"[TreasureManager] arrowIndicator assigned: {arrowIndicator != null}");
+
         authManager = AuthManager.Instance;
         locationManager = LocationManager.Instance;
 
@@ -117,6 +133,24 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         // Multiplayer flow: ARSceneController calls InitializeForRoom(roomId).
         Debug.Log("[TreasureManagerGPS_Multiplayer] Start() - waiting for InitializeForRoom...");
+    }
+
+    private void Awake()
+    {
+        // Optional if you already have Awake, merge this block there
+        if (quitConfirmPanel != null) quitConfirmPanel.SetActive(false);
+
+        if (quitConfirmYesButton != null)
+        {
+            quitConfirmYesButton.onClick.RemoveAllListeners();
+            quitConfirmYesButton.onClick.AddListener(ConfirmQuitLevelWithoutSaving);
+        }
+
+        if (quitConfirmNoButton != null)
+        {
+            quitConfirmNoButton.onClick.RemoveAllListeners();
+            quitConfirmNoButton.onClick.AddListener(CancelQuitLevelWithoutSaving);
+        }
     }
 
     private void OnDestroy()
@@ -163,50 +197,34 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         return treasuresList;
     }
 
-    /// <summary>
-    /// Called by ARSceneController once the AR scene is loaded and the roomId is known.
-    /// </summary>
     public void InitializeForRoom(string roomId)
     {
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Initializing for room: {roomId}");
         currentRoomId = roomId;
 
-        bool isSinglePlayer = !string.IsNullOrEmpty(roomId) && roomId.StartsWith("-");
+        // Ensure deps FIRST
+        if (dbRef == null)
+            dbRef = FirebaseDatabase.GetInstance(firebaseDatabaseUrl).RootReference;
+
+        if (authManager == null)
+            authManager = AuthManager.Instance;
 
         var user = FirebaseAuth.DefaultInstance?.CurrentUser;
-        if (user != null && dbRef != null)
-        {
-            DatabaseReference baseRef = isSinglePlayer
-                ? dbRef.Child("levels").Child(roomId)
-                : dbRef.Child("rooms").Child(roomId);
+        string uid = authManager?.UserId;
+        if (string.IsNullOrEmpty(uid)) uid = user?.UserId;
 
-            DatabaseReference playerRef = baseRef.Child("players").Child(user.UserId);
+        string displayName = user?.DisplayName;
+        if (string.IsNullOrWhiteSpace(displayName)) displayName = "Player";
 
-            var playerProfile = new Dictionary<string, object>
-        {
-            { "uid", user.UserId },
-            { "displayName", string.IsNullOrEmpty(user.DisplayName) ? "Player" : user.DisplayName },
-            { "photoUrl", user.PhotoUrl != null ? user.PhotoUrl.ToString() : "" },
-            { "joinedAt", ServerValue.Timestamp },
-            { "startAt", ServerValue.Timestamp },
-            { "currentScore", 0 }
-        };
-
-            playerRef.UpdateChildrenAsync(playerProfile).ContinueWithOnMainThread(t =>
-            {
-                if (t.IsFaulted || t.IsCanceled)
-                    Debug.LogWarning("[TreasureManager] Failed to write player profile: " + t.Exception);
-                else
-                    Debug.Log("[TreasureManager] Player profile initialized.");
-            });
-
-            // reset end-of-run values
-            playerRef.Child("endAt").RemoveValueAsync();
-            playerRef.Child("timeTakenMs").RemoveValueAsync();
-            playerRef.Child("elapsedTime").RemoveValueAsync(); // optional legacy
-        }
+        // Start markers
+        runStartLocalMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SaveRunStart(roomId, uid, displayName);
 
         var gameManager = GameManager.Instance;
+        foreach (var t in gameManager.CurrentLevelTreasures)
+        {
+            Debug.Log($"[PreInit] {t.name} | chType={t.challenge?.type} | optCount={(t.challenge?.options == null ? -1 : t.challenge.options.Count)}");
+        }
         if (gameManager?.CurrentLevelTreasures != null && gameManager.CurrentLevelTreasures.Count > 0)
         {
             Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {gameManager.CurrentLevelTreasures.Count} treasures from level");
@@ -217,6 +235,61 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         LoadTreasuresFromFirebase(roomId);
     }
+
+    private void SaveRunStart(string roomId, string uid, string displayName)
+    {
+        if (dbRef == null || string.IsNullOrEmpty(roomId) || string.IsNullOrEmpty(uid))
+        {
+            Debug.LogWarning("[SaveRunStart] Missing dbRef/roomId/uid");
+            return;
+        }
+
+        bool isSingle = roomId.StartsWith("-");
+        string root = isSingle ? "levels" : "rooms";
+
+        DatabaseReference playerRef = dbRef.Child(root).Child(roomId).Child("players").Child(uid);
+
+        var data = new Dictionary<string, object>
+    {
+        { "uid", uid },
+        { "displayName", string.IsNullOrWhiteSpace(displayName) ? "Player" : displayName },
+        { "startAt", ServerValue.Timestamp }
+    };
+
+        playerRef.UpdateChildrenAsync(data).ContinueWithOnMainThread(t =>
+        {
+            if (t.IsFaulted || t.IsCanceled)
+                Debug.LogWarning("[SaveRunStart] Failed: " + t.Exception);
+            else
+                Debug.Log($"[SaveRunStart] OK -> {root}/{roomId}/players/{uid}");
+        });
+
+        playerRef.Child("endAt").RemoveValueAsync();
+        playerRef.Child("timeTakenMs").RemoveValueAsync();
+        playerRef.Child("elapsedTime").RemoveValueAsync();
+    }
+
+
+    private void SaveRunEnd(string roomId, string uid, int finalScore, long timeTakenMs)
+    {
+        bool isSingle = roomId.StartsWith("-");
+        string root = isSingle ? "levels" : "rooms";
+
+        DatabaseReference baseRef = dbRef.Child(root).Child(roomId);
+        DatabaseReference playerRef = baseRef.Child("players").Child(uid);
+        DatabaseReference scoreRef = baseRef.Child("scores").Child(uid);
+
+        var playerUpdates = new Dictionary<string, object>
+    {
+        { "endAt", ServerValue.Timestamp },
+        { "timeTakenMs", timeTakenMs },
+        { "elapsedTime", timeTakenMs / 1000L } // optional legacy
+    };
+
+        playerRef.UpdateChildrenAsync(playerUpdates); // overwrite keys
+        scoreRef.SetValueAsync(finalScore);           // overwrite score
+    }
+
 
     private void LoadTreasuresFromFirebase(string roomId)
     {
@@ -271,7 +344,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 {
                     try
                     {
-                        TreasureData data = JsonUtility.FromJson<TreasureData>(treasureSnapshot.GetRawJsonValue());
+                        TreasureData data = ParseTreasureDataFromSnapshot(treasureSnapshot);
 
                         // Skip if already collected
                         bool alreadyCollected = data.collectedBy != null && data.collectedBy.Count > 0;
@@ -469,7 +542,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         string key = args.Snapshot.Key;
         if (localTreasures.ContainsKey(key)) return;
 
-        TreasureData data = JsonUtility.FromJson<TreasureData>(args.Snapshot.GetRawJsonValue());
+        TreasureData data = ParseTreasureDataFromSnapshot(args.Snapshot);
 
         // If it already has ANY collectedBy entry, treat it as already collected and ignore (disappear for everyone)
         bool collectedByAnyone = data.collectedBy != null && data.collectedBy.Count > 0;
@@ -487,7 +560,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         string key = args.Snapshot.Key;
         if (!localTreasures.ContainsKey(key)) return;
 
-        TreasureData newData = JsonUtility.FromJson<TreasureData>(args.Snapshot.GetRawJsonValue());
+        TreasureData newData = ParseTreasureDataFromSnapshot(args.Snapshot);
         localTreasures[key].data = newData;
 
         // Check if treasure has been marked as collected (disappears for everyone)
@@ -528,6 +601,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private void CollectTargetTreasure()
     {
+        if (isExitingLevel) return;
         Debug.Log("[Collect] CollectTargetTreasure() called");
         if (isCollectInProgress) return;
 
@@ -556,7 +630,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         // ── NEW: Check if this checkpoint has a challenge ─────────────────────
         bool hasChallenge = target.data.challenge != null
-                         && target.data.challenge.type != ChallengeType.None;
+                 && target.data.challenge.type != ChallengeType.None;
 
         Debug.Log($"[Collect] hasChallenge={hasChallenge}, challengeNull={(target.data.challenge == null)}, challengeType={(target.data.challenge != null ? target.data.challenge.type.ToString() : "null")}, runnerNull={(challengeRunner == null)}");
 
@@ -621,6 +695,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      }
 
                      // SUCCESS
+
+                     dbRef.Child("levels").Child(currentRoomId).Child("treasures").Child(target.key).Child("isCollected").SetValueAsync(true);
                      long totalEarned = target.data.points + bonusPoints;
 
                      if (roomCollectionMode == (int)CollectionMode.InOrder)
@@ -628,16 +704,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                          nextTreasureIndex++;
                      }
 
-                     if (ScoreManager.Instance != null)
-                     {
-                         ScoreManager.Instance.AddTreasurePoints();
-                         int currentScore = ScoreManager.Instance.GetScore();
 
-                         dbRef.Child("levels").Child(currentRoomId)
-                              .Child("players").Child(myUserId)
-                              .Child("score")
-                              .SetValueAsync(currentScore);
-                     }
 
                      dbRef.Child("levels").Child(currentRoomId)
                           .Child("scores").Child(myUserId)
@@ -795,16 +862,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             // SUCCESS
             long totalEarned = target.data.points + bonusPoints;
 
-            if (ScoreManager.Instance != null)
-            {
-                ScoreManager.Instance.AddTreasurePoints();
-                int currentScore = ScoreManager.Instance.GetScore();
 
-                dbRef.Child("rooms").Child(currentRoomId)
-                     .Child("players").Child(myUserId)
-                     .Child("currentScore")
-                     .SetValueAsync(currentScore);
-            }
 
             dbRef.Child("rooms").Child(currentRoomId)
                  .Child("scores").Child(myUserId)
@@ -820,6 +878,66 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
             Invoke(nameof(CheckForRemainingTreasures), 2f);
         });
+    }
+
+    private TreasureData ParseTreasureDataFromSnapshot(DataSnapshot snap)
+    {
+        var data = new TreasureData();
+
+        data.name = snap.Child("name").Value?.ToString() ?? "Treasure";
+        double.TryParse(snap.Child("lat").Value?.ToString(), out data.lat);
+        double.TryParse(snap.Child("lon").Value?.ToString(), out data.lon);
+        long.TryParse(snap.Child("points").Value?.ToString(), out data.points);
+        int.TryParse(snap.Child("orderIndex").Value?.ToString(), out data.orderIndex);
+
+        // collectedBy
+        data.collectedBy = new Dictionary<string, bool>();
+        if (snap.HasChild("collectedBy"))
+        {
+            foreach (var c in snap.Child("collectedBy").Children)
+            {
+                bool v = false;
+                bool.TryParse(c.Value?.ToString(), out v);
+                data.collectedBy[c.Key] = v;
+            }
+        }
+
+        // challenge
+        if (snap.HasChild("challenge"))
+        {
+            var ch = snap.Child("challenge");
+            var cd = new ChallengeData();
+
+            int typeInt = 0;
+            int.TryParse(ch.Child("type").Value?.ToString(), out typeInt);
+            cd.type = (ChallengeType)typeInt;
+
+            cd.question = ch.Child("question").Value?.ToString() ?? "";
+            int.TryParse(ch.Child("bonusPoints").Value?.ToString(), out cd.bonusPoints);
+            int.TryParse(ch.Child("maxAttempts").Value?.ToString(), out cd.maxAttempts);
+            int.TryParse(ch.Child("timeLimitSeconds").Value?.ToString(), out cd.timeLimitSeconds);
+            cd.minigameId = ch.Child("minigameId").Value?.ToString() ?? "";
+
+            cd.options = new List<MCQOption>();
+            if (ch.HasChild("options"))
+            {
+                foreach (var optSnap in ch.Child("options").Children)
+                {
+                    var opt = new MCQOption
+                    {
+                        text = optSnap.Child("text").Value?.ToString() ?? ""
+                    };
+                    bool isCorrect = false;
+                    bool.TryParse(optSnap.Child("isCorrect").Value?.ToString(), out isCorrect);
+                    opt.isCorrect = isCorrect;
+                    cd.options.Add(opt);
+                }
+            }
+
+            data.challenge = cd;
+        }
+
+        return data;
     }
 
     /// <summary>
@@ -858,51 +976,39 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         CancelInvoke(nameof(UpdateFinderState));
         StopListeningForTreasures();
 
-        if (string.IsNullOrEmpty(authManager?.UserId) || string.IsNullOrEmpty(currentRoomId))
+        if (suppressResultSave)
+        {
+            Debug.Log("[TreasureManager] Result save suppressed. Exiting without Firebase updates.");
+            UnityEngine.SceneManagement.SceneManager.LoadScene("LevelBrowserScene"); // or ScoreboardScene if you want
+            return;
+        }
+
+        if (string.IsNullOrEmpty(authManager?.UserId) || string.IsNullOrEmpty(currentRoomId) || dbRef == null)
         {
             UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
             return;
         }
 
-        bool isSinglePlayer = currentRoomId.StartsWith("-");
-        DatabaseReference baseRef = isSinglePlayer
-            ? dbRef.Child("levels").Child(currentRoomId)
-            : dbRef.Child("rooms").Child(currentRoomId);
+        bool isSingle = currentRoomId.StartsWith("-");
+        string root = isSingle ? "levels" : "rooms";
+        string uid = authManager.UserId;
 
-        DatabaseReference playerRef = baseRef.Child("players").Child(authManager.UserId);
+        long takenMs = Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - runStartLocalMs);
 
-        playerRef.GetValueAsync().ContinueWithOnMainThread(task =>
+        DatabaseReference scoreRef = dbRef.Child(root).Child(currentRoomId).Child("scores").Child(uid);
+        scoreRef.GetValueAsync().ContinueWithOnMainThread(t =>
         {
-            if (task.IsFaulted || task.IsCanceled || !task.Result.Exists)
-            {
-                Debug.LogWarning("[TreasureManager] Could not read player startAt, loading scoreboard anyway.");
-                UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
-                return;
-            }
+            int dbScore = 0;
+            if (!t.IsFaulted && !t.IsCanceled && t.Result.Exists)
+                int.TryParse(t.Result.Value?.ToString(), out dbScore);
 
-            long startMs = 0;
-            if (task.Result.HasChild("startAt"))
-                long.TryParse(task.Result.Child("startAt").Value?.ToString(), out startMs);
+            int localScore = ScoreManager.Instance != null ? ScoreManager.Instance.GetScore() : 0;
+            int finalScore = Mathf.Max(dbScore, localScore); // prevent accidental overwrite to 0
 
-            long endMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            long takenMs = (startMs > 0) ? Mathf.Max(0, (int)(endMs - startMs)) : 0;
+            SaveRunEnd(currentRoomId, uid, finalScore, takenMs);
 
-            var updates = new Dictionary<string, object>
-        {
-            { "endAt", ServerValue.Timestamp },
-            { "timeTakenMs", (long)takenMs },
-            { "elapsedTime", (long)(takenMs / 1000L) } // optional legacy
-        };
-
-            playerRef.UpdateChildrenAsync(updates).ContinueWithOnMainThread(writeTask =>
-            {
-                if (writeTask.IsFaulted || writeTask.IsCanceled)
-                    Debug.LogWarning("[TreasureManager] Failed writing time: " + writeTask.Exception);
-                else
-                    Debug.Log($"[TreasureManager] Saved timeTakenMs={takenMs}");
-
-                UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
-            });
+            Debug.Log($"[TreasureManager] Saved final result: score={finalScore}, timeTakenMs={takenMs}");
+            UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
         });
     }
 
@@ -973,6 +1079,53 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     }
 
     // --- MODE SWITCHING & UI ---
+
+    /// <summary>
+    /// Called by Exit button. Opens confirmation UI.
+    /// </summary>
+    public void RequestQuitLevelWithoutSaving()
+    {
+        if (isExitingLevel) return;
+
+        if (quitConfirmPanel != null)
+        {
+            if (quitConfirmText != null)
+                quitConfirmText.text = "Quit level now? Your progress and score will NOT be saved.";
+            quitConfirmPanel.SetActive(true);
+        }
+        else
+        {
+            // Fallback if panel missing
+            ConfirmQuitLevelWithoutSaving();
+        }
+    }
+
+    private void CancelQuitLevelWithoutSaving()
+    {
+        if (quitConfirmPanel != null)
+            quitConfirmPanel.SetActive(false);
+    }
+
+    private void ConfirmQuitLevelWithoutSaving()
+    {
+        if (isExitingLevel) return;
+        isExitingLevel = true;
+        suppressResultSave = true;
+
+        if (quitConfirmPanel != null)
+            quitConfirmPanel.SetActive(false);
+
+        Debug.Log("[TreasureManager] Confirmed quit without saving.");
+
+        CancelInvoke(nameof(UpdateFinderState));
+        StopListeningForTreasures();
+        StopAllCoroutines();
+
+        if (challengeRunner != null)
+            challengeRunner.gameObject.SetActive(false);
+
+        UnityEngine.SceneManagement.SceneManager.LoadScene("MenuScene");
+    }
 
     private void ToggleMode()
     {

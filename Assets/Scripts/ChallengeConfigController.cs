@@ -25,44 +25,66 @@ public class ChallengeConfigController : MonoBehaviour
 
     [Header("Minigame Sub-Panel")]
     [SerializeField] private GameObject minigameSubPanel;
-    [SerializeField] private TMP_Dropdown minigameDropdown;      // MemoryMatch_Easy etc.
+    [SerializeField] private TMP_Dropdown minigameDropdown;
     [SerializeField] private TMP_InputField timeLimitInput;
 
-    [Header("Buttons")]
+    [Header("Sub-Panel Cancel Buttons")]
+    [SerializeField] private Button cancelMcqSubpanelButton;
+    [SerializeField] private Button cancelMinigameSubpanelButton;
+
+    [Header("Shared Action Buttons")]
     [SerializeField] private Button saveChallengeButton;
-    [SerializeField] private Button cancelChallengeButton;
+    [SerializeField] private Button cancelChallengeButton; // cancel = back to type selection
 
-    [Header("Pin Label (feedback)")]
-    [SerializeField] private TMP_Text pinChallengeStatusText; // shows "✓ MCQ attached" on pin
-
-    // ── State ─────────────────────────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────────────
     private int editingPinIndex = -1;
     private System.Action<int, ChallengeData> onSaveCallback;
 
     private readonly List<string> minigameOptions = new()
     {
-        "MemoryMatch_Easy",
-        "MemoryMatch_Hard",
-        "OrderSequence",
-        "BalloonPop_Easy",
-        "BalloonPop_Hard"
+        "MemoryMatch",
+        "OrderSequence"
     };
 
     // ─────────────────────────────────────────────────────────────────────────
 
     private void Awake()
     {
-        // Populate dropdowns
         challengeTypeDropdown.ClearOptions();
-        challengeTypeDropdown.AddOptions(new List<string> { "None", "MCQ", "Minigame" });
+        challengeTypeDropdown.AddOptions(new List<string> { "None", "MCQ", "AR MCQ", "Minigame" });
 
         minigameDropdown.ClearOptions();
         minigameDropdown.AddOptions(minigameOptions);
 
-        // Wire listeners
+        // Type change
+        challengeTypeDropdown.onValueChanged.RemoveAllListeners();
         challengeTypeDropdown.onValueChanged.AddListener(OnTypeChanged);
-        saveChallengeButton.onClick.AddListener(OnSaveChallenge);
-        cancelChallengeButton.onClick.AddListener(Hide);
+
+        // Save / Cancel
+        if (saveChallengeButton != null)
+        {
+            saveChallengeButton.onClick.RemoveAllListeners();
+            saveChallengeButton.onClick.AddListener(OnSaveChallenge);
+        }
+
+        if (cancelChallengeButton != null)
+        {
+            cancelChallengeButton.onClick.RemoveAllListeners();
+            cancelChallengeButton.onClick.AddListener(BackToTypeSelection);
+        }
+
+        // Sub-panel cancel buttons
+        if (cancelMcqSubpanelButton != null)
+        {
+            cancelMcqSubpanelButton.onClick.RemoveAllListeners();
+            cancelMcqSubpanelButton.onClick.AddListener(BackToTypeSelection);
+        }
+
+        if (cancelMinigameSubpanelButton != null)
+        {
+            cancelMinigameSubpanelButton.onClick.RemoveAllListeners();
+            cancelMinigameSubpanelButton.onClick.AddListener(BackToTypeSelection);
+        }
 
         challengeConfigPanel.SetActive(false);
     }
@@ -70,23 +92,16 @@ public class ChallengeConfigController : MonoBehaviour
     /// <summary>
     /// Call this when the creator taps a placed pin to configure its challenge.
     /// </summary>
-    /// <param name="pinIndex">Index in the working pins list</param>
-    /// <param name="existing">Existing challenge data (or null if none)</param>
-    /// <param name="onSave">Callback: (pinIndex, challengeData) → called on save</param>
-    public void Show(int pinIndex, ChallengeData existing,
-                     System.Action<int, ChallengeData> onSave)
+    public void Show(int pinIndex, ChallengeData existing, System.Action<int, ChallengeData> onSave)
     {
         editingPinIndex = pinIndex;
         onSaveCallback = onSave;
 
-        // Pre-fill with existing data
-        if (existing != null)
-            LoadExistingChallenge(existing);
-        else
-            ResetToDefaults();
+        if (existing != null) LoadExistingChallenge(existing);
+        else ResetToDefaults();
 
         challengeConfigPanel.SetActive(true);
-        OnTypeChanged(challengeTypeDropdown.value); // show correct sub-panel
+        OnTypeChanged(challengeTypeDropdown.value);
     }
 
     public void Hide()
@@ -99,9 +114,38 @@ public class ChallengeConfigController : MonoBehaviour
 
     private void OnTypeChanged(int index)
     {
-        // index: 0=None, 1=MCQ, 2=Minigame
-        mcqSubPanel.SetActive(index == 1);
-        minigameSubPanel.SetActive(index == 2);
+        // 0=None, 1=MCQ, 2=AR MCQ, 3=Minigame
+        bool isMCQFamily = (index == 1 || index == 2);
+        bool isMini = (index == 3);
+        bool showActionButtons = isMCQFamily || isMini;
+
+        mcqSubPanel.SetActive(isMCQFamily);
+        minigameSubPanel.SetActive(isMini);
+
+        if (saveChallengeButton != null) saveChallengeButton.gameObject.SetActive(showActionButtons);
+        if (cancelChallengeButton != null) cancelChallengeButton.gameObject.SetActive(showActionButtons);
+
+        var mcqCanvas = mcqSubPanel != null ? mcqSubPanel.GetComponent<CanvasGroup>() : null;
+        if (mcqCanvas != null)
+        {
+            mcqCanvas.blocksRaycasts = isMCQFamily;   
+            mcqCanvas.interactable = isMCQFamily;     
+        }
+
+        var miniCanvas = minigameSubPanel != null ? minigameSubPanel.GetComponent<CanvasGroup>() : null;
+        if (miniCanvas != null)
+        {
+            miniCanvas.blocksRaycasts = isMini;
+            miniCanvas.interactable = isMini;
+        }
+
+        challengeTypeDropdown.RefreshShownValue();
+    }
+
+    private void BackToTypeSelection()
+    {
+        challengeTypeDropdown.value = 0;
+        OnTypeChanged(0);
     }
 
     // ── Save ──────────────────────────────────────────────────────────────────
@@ -119,8 +163,15 @@ public class ChallengeConfigController : MonoBehaviour
         {
             if (!ValidateMCQ()) return;
             data = BuildMCQData();
+            data.type = ChallengeType.MCQ;
         }
-        else if (typeIndex == 2) // Minigame
+        else if (typeIndex == 2) // AR MCQ
+        {
+            if (!ValidateMCQ()) return;
+            data = BuildMCQData();
+            data.type = ChallengeType.ARMCQ;
+        }
+        else if (typeIndex == 3) // Minigame
         {
             data = BuildMinigameData();
         }
@@ -191,14 +242,15 @@ public class ChallengeConfigController : MonoBehaviour
         var id = minigameOptions[minigameDropdown.value];
         ChallengeType resolvedType = id switch
         {
-            "MemoryMatch_Easy" or "MemoryMatch_Hard" => ChallengeType.MemoryMatch,
-            "OrderSequence"                          => ChallengeType.OrderSequence
+            "MemoryMatch" => ChallengeType.MemoryMatch,
+            "OrderSequence" => ChallengeType.OrderSequence,
+            _ => ChallengeType.None
         };
 
         return new ChallengeData
         {
-            type             = resolvedType,
-            minigameId       = id,
+            type = resolvedType,
+            minigameId = id,
             timeLimitSeconds = timeLimit > 0 ? timeLimit : 60
         };
     }
@@ -207,6 +259,9 @@ public class ChallengeConfigController : MonoBehaviour
 
     private void LoadExistingChallenge(ChallengeData data)
     {
+        // clean defaults first
+        ResetToDefaults();
+
         switch (data.type)
         {
             case ChallengeType.None:
@@ -215,18 +270,49 @@ public class ChallengeConfigController : MonoBehaviour
 
             case ChallengeType.MCQ:
                 challengeTypeDropdown.value = 1;
-                questionInput.text = data.question;
+                questionInput.text = data.question ?? "";
                 bonusPointsInput.text = data.bonusPoints.ToString();
                 maxAttemptsInput.text = data.maxAttempts.ToString();
-                for (int i = 0; i < optionInputs.Length && i < data.options.Count; i++)
+
+                if (data.options != null)
                 {
-                    optionInputs[i].text = data.options[i].text;
-                    if (data.options[i].isCorrect) correctAnswerDropdown.value = i;
+                    for (int i = 0; i < optionInputs.Length && i < data.options.Count; i++)
+                    {
+                        optionInputs[i].text = data.options[i].text ?? "";
+                        if (data.options[i].isCorrect) correctAnswerDropdown.value = i;
+                    }
+                }
+                break;
+            case ChallengeType.ARMCQ:
+                challengeTypeDropdown.value = 2;
+                questionInput.text = data.question ?? "";
+                bonusPointsInput.text = data.bonusPoints.ToString();
+                maxAttemptsInput.text = data.maxAttempts.ToString();
+
+                if (data.options != null)
+                {
+                    for (int i = 0; i < optionInputs.Length && i < data.options.Count; i++)
+                    {
+                        optionInputs[i].text = data.options[i].text ?? "";
+                        if (data.options[i].isCorrect) correctAnswerDropdown.value = i;
+                    }
                 }
                 break;
 
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
+                challengeTypeDropdown.value = 3;
+                if (!string.IsNullOrEmpty(data.minigameId))
+                {
+                    int idx = minigameOptions.IndexOf(data.minigameId);
+                    minigameDropdown.value = idx >= 0 ? idx : 0;
+                }
+                else
+                {
+                    minigameDropdown.value = data.type == ChallengeType.OrderSequence ? 1 : 0;
+                }
+
+                timeLimitInput.text = (data.timeLimitSeconds > 0 ? data.timeLimitSeconds : 60).ToString();
                 break;
         }
     }
@@ -234,11 +320,13 @@ public class ChallengeConfigController : MonoBehaviour
     private void ResetToDefaults()
     {
         challengeTypeDropdown.value = 0;
+
         questionInput.text = "";
         foreach (var opt in optionInputs) opt.text = "";
         correctAnswerDropdown.value = 0;
         bonusPointsInput.text = "50";
         maxAttemptsInput.text = "3";
+
         minigameDropdown.value = 0;
         timeLimitInput.text = "60";
     }

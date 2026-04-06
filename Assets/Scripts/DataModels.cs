@@ -8,6 +8,7 @@ public enum ChallengeType
     MCQ,            // multiple choice question
     MemoryMatch,    // built-in minigame: flip tiles to find pairs
     OrderSequence,  // built-in minigame: arrange items in correct order
+    ARMCQ,           // AR-based multiple choice (e.g. find the correct object in AR)
 }
 
 [Serializable]

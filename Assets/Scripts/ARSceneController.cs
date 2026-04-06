@@ -15,6 +15,7 @@ public class ARSceneController : MonoBehaviour
 
     void Start()
     {
+        Debug.Log("[ARSceneController] START CALLED - Scene properly initialized");
         gameManager = GameManager.Instance;
         treasureManager = FindObjectOfType<TreasureManagerGPS_Multiplayer>();
 
