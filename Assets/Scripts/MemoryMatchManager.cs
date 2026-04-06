@@ -57,10 +57,7 @@ public class MemoryMatchManager : MonoBehaviour
         currentChallenge = challenge;
         onGameComplete = onComplete;
 
-        // Determine difficulty
-        bool isHard = challenge.minigameId == "MemoryMatch_Hard";
-        gridRows = isHard ? 5 : 4;
-        gridCols = isHard ? 4 : 4;
+        
 
         timeRemaining = challenge.timeLimitSeconds > 0 ? challenge.timeLimitSeconds : 60;
 

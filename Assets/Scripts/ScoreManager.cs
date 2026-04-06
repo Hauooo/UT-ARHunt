@@ -46,18 +46,20 @@ public class ScoreManager : MonoBehaviour
     private void Start()
     {
         if (authManager == null)
-        {
-            Debug.LogError("[ScoreManager] AuthManager reference is missing!");
             authManager = FindObjectOfType<AuthManager>();
-        }
 
-        if (authManager == null)
+        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+        cachedUserId = !string.IsNullOrEmpty(authManager?.UserId) ? authManager.UserId : user?.UserId;
+
+        if (string.IsNullOrEmpty(cachedUserId))
         {
-            Debug.LogError("[ScoreManager] Could not find AuthManager in scene!");
+            Debug.LogError("[ScoreManager] No user ID available from AuthManager or FirebaseAuth.");
             return;
         }
 
-        cachedUserId = authManager.UserId;
+        if (authManager == null)
+            Debug.LogWarning("[ScoreManager] AuthManager missing, using FirebaseAuth fallback.");
+
         LoadPlayerName();
         InitializeFirebase();
         LoadScoreAndTimeFromFirebase();

@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 
 public class ChallengeRunner : MonoBehaviour
 {
@@ -17,6 +18,9 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private TMP_Text attemptsText;
     [SerializeField] private TMP_Text resultText;
 
+    [Header("AR MCQ UI")]
+    [SerializeField] private ARMCQPanelController arMcqPanel;
+
     [Header("Minigame UI")]
     [SerializeField] private GameObject minigamePanel;
     [SerializeField] private TMP_Text minigameNameText;
@@ -25,19 +29,26 @@ public class ChallengeRunner : MonoBehaviour
 
     [Header("AR Minigames")]
     [SerializeField] private MemoryMatchManager memoryMatchManager;
+    [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
+
+    [Header("AR MCQ")]
+    [SerializeField] private ARMCQMinigameController arMcqMinigameController;
+    [SerializeField] private Transform arSpawnCenter; // optional, fallback = camera forward
 
     [Header("Shared")]
     [SerializeField] private Button skipButton;
-    [SerializeField] private Button retryButton; // NEW
+    [SerializeField] private Button retryButton;
 
     private ChallengeData currentChallenge;
     private int attemptsLeft;
     private System.Action<bool, int> onComplete;
     private bool awaitingRetryChoice;
+    private bool challengeInProgress = false;
 
     private void Awake()
     {
         challengePanel.SetActive(false);
+        if (arMcqPanel != null) arMcqPanel.Hide();
 
         if (skipButton != null)
         {
@@ -59,18 +70,19 @@ public class ChallengeRunner : MonoBehaviour
         }
     }
 
-    public void RunChallenge(ChallengeData challenge, System.Action<bool, int> onComplete)
+    public void RunChallenge(ChallengeData challenge, System.Action<bool, int> onCompleteCallback)
     {
         if (challenge == null || challenge.type == ChallengeType.None)
         {
-            onComplete?.Invoke(true, 0);
+            onCompleteCallback?.Invoke(true, 0);
             return;
         }
 
         currentChallenge = challenge;
-        this.onComplete = onComplete;
-        attemptsLeft = challenge.maxAttempts;
+        onComplete = onCompleteCallback;
+        attemptsLeft = Mathf.Max(1, challenge.maxAttempts);
         awaitingRetryChoice = false;
+        challengeInProgress = true;
 
         challengePanel.SetActive(true);
         resultText.text = "";
@@ -81,24 +93,63 @@ public class ChallengeRunner : MonoBehaviour
         switch (challenge.type)
         {
             case ChallengeType.MCQ:
-                ShowMCQ(challenge);
+                ShowMCQ(challenge); // pure 2D MCQ
                 break;
+
+            case ChallengeType.ARMCQ:
+                ShowARMCQ(challenge); // AR scattered options + ARMCQPanel
+                break;
+
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
                 ShowMinigameLauncher(challenge);
                 break;
+
+            default:
+                Debug.LogWarning($"[ChallengeRunner] Unknown challenge type: {challenge.type}");
+                OnChallengeComplete(false, 0);
+                break;
         }
     }
 
+    // ---------------- MCQ (2D) ----------------
+
     private void ShowMCQ(ChallengeData challenge)
     {
+        // Validate challenge data
+        if (challenge == null || challenge.type != ChallengeType.MCQ)
+        {
+            resultText.text = "Invalid MCQ challenge data";
+            Debug.LogError("[ChallengeRunner] Invalid MCQ challenge");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
+        if (string.IsNullOrEmpty(challenge.question))
+        {
+            resultText.text = "Question missing";
+            Debug.LogError("[ChallengeRunner] MCQ question is missing");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
+        if (challenge.options == null || challenge.options.Count == 0)
+        {
+            resultText.text = "Options missing";
+            Debug.LogError("[ChallengeRunner] MCQ options missing. Data invalid: options missing.");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
         mcqPanel.SetActive(true);
         minigamePanel.SetActive(false);
         questionText.text = challenge.question;
         UpdateAttemptsText();
 
-        var shuffled = new List<MCQOption>(challenge.options);
-        shuffled.Sort((a, b) => Random.Range(-1, 2));
+
+
+    var shuffled = new List<MCQOption>(challenge.options);
+        shuffled = shuffled.OrderBy(_ => Random.value).ToList();
 
         for (int i = 0; i < answerButtons.Length; i++)
         {
@@ -116,10 +167,12 @@ public class ChallengeRunner : MonoBehaviour
 
     private void OnAnswerSelected(bool isCorrect)
     {
+        if (!challengeInProgress) return;
+
         if (isCorrect)
         {
-            resultText.text = "✅ Correct!";
-            StartCoroutine(DelayedComplete(true, currentChallenge.bonusPoints));
+            resultText.text = "Correct!";
+            OnChallengeComplete(true, currentChallenge.bonusPoints);
             return;
         }
 
@@ -128,32 +181,100 @@ public class ChallengeRunner : MonoBehaviour
 
         if (attemptsLeft <= 0)
         {
-            resultText.text = "❌ Failed. You can skip.";
-            StartCoroutine(DelayedComplete(false, 0));
+            resultText.text = "Challenge failed. Try again!";
+            OnChallengeComplete(false, 0);
         }
         else
         {
-            resultText.text = $"❌ Wrong! {attemptsLeft} left.";
+            resultText.text = $"Wrong! {attemptsLeft} attempt(s) left.";
         }
     }
 
-    private void UpdateAttemptsText() => attemptsText.text = $"Attempts left: {attemptsLeft}";
+    // ---------------- AR MCQ ----------------
+
+    private void ShowARMCQ(ChallengeData challenge)
+    {
+        if (arMcqMinigameController == null)
+        {
+            Debug.LogError("[ChallengeRunner] ARMCQ controller not assigned!");
+            resultText.text = "AR MCQ is not configured.";
+            return;
+        }
+
+        if (challenge == null || challenge.options == null || challenge.options.Count == 0)
+        {
+            Debug.LogError("[ChallengeRunner] ARMCQ data invalid: options missing.");
+            resultText.text = "Challenge data invalid (no options).";
+            if (arMcqPanel != null) arMcqPanel.SetResult("No options configured for this AR MCQ.");
+            return; // do not call StartMinigame
+        }
+
+        Debug.Log($"[ChallengeRunner] ShowARMCQ start | q='{challenge.question}' | options={(challenge.options == null ? -1 : challenge.options.Count)} | maxAttempts={challenge.maxAttempts}");
+
+        mcqPanel.SetActive(false);
+        minigamePanel.SetActive(false);
+
+        Vector3 center = (arSpawnCenter != null)
+            ? arSpawnCenter.position
+            : (Camera.main != null ? Camera.main.transform.position + Camera.main.transform.forward * 3f : Vector3.zero);
+
+        if (arMcqPanel != null)
+            arMcqPanel.Show(challenge.question, attemptsLeft, OnSkipClicked);
+
+        resultText.text = "Find and tap the correct answer in AR space!";
+        arMcqMinigameController.StartMinigame(challenge, center, OnARMCQResult);
+    }
+
+    private void OnARMCQResult(bool success, int score)
+    {
+        if (!challengeInProgress) return;
+
+        if (success)
+        {
+            if (arMcqPanel != null) arMcqPanel.SetResult("Correct!");
+            resultText.text = "Correct!";
+            OnChallengeComplete(true, score > 0 ? score : currentChallenge.bonusPoints);
+            return;
+        }
+
+        attemptsLeft--;
+        UpdateAttemptsText();
+        if (arMcqPanel != null) arMcqPanel.UpdateAttempts(attemptsLeft);
+
+        if (attemptsLeft <= 0)
+        {
+            if (arMcqPanel != null) arMcqPanel.SetResult("Challenge failed. Try again!");
+            resultText.text = "Challenge failed. Try again!";
+            OnChallengeComplete(false, 0);
+        }
+        else
+        {
+            if (arMcqPanel != null) arMcqPanel.SetResult($"Wrong! {attemptsLeft} attempt(s) left.");
+            resultText.text = $"Wrong! {attemptsLeft} attempt(s) left.";
+
+            Vector3 center = (arSpawnCenter != null)
+                ? arSpawnCenter.position
+                : (Camera.main != null ? Camera.main.transform.position + Camera.main.transform.forward * 3f : Vector3.zero);
+
+            arMcqMinigameController.StartMinigame(currentChallenge, center, OnARMCQResult);
+        }
+    }
+
+    // ---------------- Minigames ----------------
 
     private void ShowMinigameLauncher(ChallengeData challenge)
     {
+        if (arMcqPanel != null) arMcqPanel.Hide();
+
         mcqPanel.SetActive(false);
         minigamePanel.SetActive(true);
-
-        minigameNameText.text = $"Challenge: {challenge.minigameId}\nTime limit: {challenge.timeLimitSeconds}s";
-
-        launchMinigameButton.onClick.RemoveAllListeners();
-        launchMinigameButton.onClick.AddListener(() => StartCoroutine(LaunchMinigame(challenge)));
+        minigameNameText.text = $"{challenge.minigameId}";
+        if (timerText != null) timerText.text = $"Time: {challenge.timeLimitSeconds}s";
     }
 
     private void OnLaunchMinigameClicked()
     {
-        if (currentChallenge != null)
-            StartCoroutine(LaunchMinigame(currentChallenge));
+        if (currentChallenge != null) StartCoroutine(LaunchMinigame(currentChallenge));
     }
 
     private IEnumerator LaunchMinigame(ChallengeData challenge)
@@ -164,51 +285,55 @@ public class ChallengeRunner : MonoBehaviour
 
         switch (challenge.minigameId)
         {
-            case "MemoryMatch_Easy":
-            case "MemoryMatch_Hard":
+            case "MemoryMatch":
                 if (memoryMatchManager != null)
                 {
                     challengePanel.SetActive(false);
-                    memoryMatchManager.StartGame(challenge, OnMinigameResult);
+                    memoryMatchManager.StartGame(challenge, success => OnMinigameResult(success, success ? currentChallenge.bonusPoints : 0));
                     yield break;
                 }
-                OnMinigameResult(false);
+                OnMinigameResult(false, 0);
+                yield break;
+
+            case "OrderSequence":
+                if (orderSequenceMinigame != null)
+                {
+                    challengePanel.SetActive(false);
+                    orderSequenceMinigame.StartMinigame((success, score) => OnMinigameResult(success, score));
+                    yield break;
+                }
+                OnMinigameResult(false, 0);
+                yield break;
+
+            default:
+                OnMinigameResult(false, 0);
                 yield break;
         }
-
-        yield return new WaitForSeconds(3f);
-        OnMinigameResult(false);
     }
 
-    private void OnMinigameResult(bool success)
+    private void OnMinigameResult(bool success, int score)
     {
         if (memoryMatchManager != null) memoryMatchManager.StopGame();
+        if (orderSequenceMinigame != null) orderSequenceMinigame.StopMinigame();
 
         challengePanel.SetActive(true);
 
         if (success)
         {
-            resultText.text = "✅ Minigame completed!";
-            StartCoroutine(DelayedComplete(true, currentChallenge.bonusPoints));
+            resultText.text = "Minigame completed!";
+            OnChallengeComplete(true, currentChallenge.bonusPoints);
         }
         else
         {
-            // KEY FIX: don't auto-complete fail; wait for user action
             awaitingRetryChoice = true;
-            resultText.text = "❌ Minigame failed. Retry or Skip?";
+            resultText.text = "Failed. Retry or Skip?";
             minigamePanel.SetActive(true);
-
             if (retryButton != null) retryButton.gameObject.SetActive(true);
             if (skipButton != null) skipButton.gameObject.SetActive(true);
         }
     }
 
-    private IEnumerator DelayedComplete(bool success, int bonus)
-    {
-        yield return new WaitForSeconds(1.0f);
-        challengePanel.SetActive(false);
-        onComplete?.Invoke(success, bonus);
-    }
+    // ---------------- Shared ----------------
 
     private void OnRetryClicked()
     {
@@ -219,7 +344,45 @@ public class ChallengeRunner : MonoBehaviour
 
     private void OnSkipClicked()
     {
+        if (!challengeInProgress) return;
+
+        if (arMcqMinigameController != null)
+            arMcqMinigameController.StopMinigame();
+
+        if (arMcqPanel != null)
+            arMcqPanel.Hide();
+
+        OnChallengeComplete(false, 0);
+    }
+
+    private void UpdateAttemptsText()
+    {
+        if (attemptsText != null) attemptsText.text = $"Attempts: {attemptsLeft}";
+    }
+
+    private void OnChallengeComplete(bool success, int bonusPoints)
+    {
+        challengeInProgress = false;
+        StartCoroutine(DelayedComplete(success, bonusPoints));
+    }
+
+    private IEnumerator DelayedComplete(bool success, int bonus)
+    {
+        yield return new WaitForSeconds(1.5f);
+
+        if (arMcqMinigameController != null)
+            arMcqMinigameController.StopMinigame();
+
+        if (arMcqPanel != null)
+            arMcqPanel.Hide();
+
         challengePanel.SetActive(false);
-        onComplete?.Invoke(false, 0);
+        mcqPanel.SetActive(false);
+        minigamePanel.SetActive(false);
+
+        if (retryButton != null) retryButton.gameObject.SetActive(false);
+        if (skipButton != null) skipButton.gameObject.SetActive(false);
+
+        onComplete?.Invoke(success, bonus);
     }
 }

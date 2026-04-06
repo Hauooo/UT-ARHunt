@@ -164,9 +164,45 @@ public class GameManager : MonoBehaviour
         CurrentMode = GameMode.PlayingInRoom;
         CurrentRoomId = levelId;
         IsHost = true;
-        CurrentLevelTreasures = treasures;
 
-        Debug.Log($"[GameManager] Set game mode for level: {levelName} ({levelId}) with {treasures.Count} treasures");
+        // Deep copy to avoid null/mutation side effects from source list
+        CurrentLevelTreasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
+        TreasureKeys = new Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string>();
+
+        foreach (var t in treasures)
+        {
+            var copy = new TreasureManagerGPS_Multiplayer.TreasureData
+            {
+                name = t.name,
+                lat = t.lat,
+                lon = t.lon,
+                points = t.points,
+                orderIndex = t.orderIndex,
+                collectedBy = t.collectedBy != null ? new Dictionary<string, bool>(t.collectedBy) : new Dictionary<string, bool>(),
+                challenge = CloneChallenge(t.challenge)
+            };
+
+            CurrentLevelTreasures.Add(copy);
+        }
+
+        Debug.Log($"[GameManager] Set game mode for level: {levelName} ({levelId}) with {CurrentLevelTreasures.Count} treasures");
+    }
+
+    private ChallengeData CloneChallenge(ChallengeData c)
+    {
+        if (c == null) return null;
+        return new ChallengeData
+        {
+            type = c.type,
+            question = c.question,
+            bonusPoints = c.bonusPoints,
+            maxAttempts = c.maxAttempts,
+            minigameId = c.minigameId,
+            timeLimitSeconds = c.timeLimitSeconds,
+            options = c.options != null
+                ? new List<MCQOption>(c.options.ConvertAll(o => new MCQOption { text = o.text, isCorrect = o.isCorrect }))
+                : new List<MCQOption>()
+        };
     }
 
     public Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string> TreasureKeys { get; set; }
