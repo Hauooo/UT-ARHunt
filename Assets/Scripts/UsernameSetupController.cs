@@ -73,10 +73,16 @@ public class UsernameSetupController : MonoBehaviour
         }
 
         SetFeedback("Saving...");
+        saveButton.interactable = false;
+        if (cancelButton != null) cancelButton.interactable = false;
+
         var profile = new UserProfile { DisplayName = name };
 
         user.UpdateUserProfileAsync(profile).ContinueWithOnMainThread(task =>
         {
+            saveButton.interactable = true;
+            if (cancelButton != null) cancelButton.interactable = true;
+
             if (task.IsFaulted || task.IsCanceled)
             {
                 SetFeedback("Failed to save username.");
@@ -84,22 +90,21 @@ public class UsernameSetupController : MonoBehaviour
                 return;
             }
 
+            // Optional but recommended: mirror username to RTDB for scoreboard consistency
+            // FirebaseDatabase.GetInstance("https://...").RootReference
+            //     .Child("users").Child(user.UserId).Child("displayName").SetValueAsync(name);
+
             SetFeedback("Saved!");
             Debug.Log($"[UsernameSetup] Username updated to: {name}");
-
             OnUsernameSaved?.Invoke(name);
 
             if (panelRoot != null) panelRoot.SetActive(false);
             isMandatory = false;
-        });
 
-        //back to menu panel after saving.
             var menuManager = FindObjectOfType<MenuManager>();
             if (menuManager != null)
-            {
                 menuManager.ShowPanel(menuManager.mainMenuPanel);
-        }
-
+        });
     }
 
     private bool IsValid(string n)

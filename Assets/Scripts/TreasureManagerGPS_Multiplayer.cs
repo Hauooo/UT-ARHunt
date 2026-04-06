@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using Firebase.Database;
 using Firebase.Extensions;
+using Firebase.Auth;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -168,32 +169,48 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     public void InitializeForRoom(string roomId)
     {
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Initializing for room: {roomId}");
-
         currentRoomId = roomId;
 
         bool isSinglePlayer = !string.IsNullOrEmpty(roomId) && roomId.StartsWith("-");
 
-        // Record level start timing for this player
-        if (!string.IsNullOrEmpty(authManager?.UserId) && dbRef != null)
+        var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+        if (user != null && dbRef != null)
         {
-            DatabaseReference playerRef = isSinglePlayer
-                ? dbRef.Child("levels").Child(roomId).Child("players").Child(authManager.UserId)
-                : dbRef.Child("rooms").Child(roomId).Child("players").Child(authManager.UserId);
+            DatabaseReference baseRef = isSinglePlayer
+                ? dbRef.Child("levels").Child(roomId)
+                : dbRef.Child("rooms").Child(roomId);
 
-            playerRef.Child("startAt").SetValueAsync(ServerValue.Timestamp);
+            DatabaseReference playerRef = baseRef.Child("players").Child(user.UserId);
+
+            var playerProfile = new Dictionary<string, object>
+        {
+            { "uid", user.UserId },
+            { "displayName", string.IsNullOrEmpty(user.DisplayName) ? "Player" : user.DisplayName },
+            { "photoUrl", user.PhotoUrl != null ? user.PhotoUrl.ToString() : "" },
+            { "joinedAt", ServerValue.Timestamp },
+            { "startAt", ServerValue.Timestamp },
+            { "currentScore", 0 }
+        };
+
+            playerRef.UpdateChildrenAsync(playerProfile).ContinueWithOnMainThread(t =>
+            {
+                if (t.IsFaulted || t.IsCanceled)
+                    Debug.LogWarning("[TreasureManager] Failed to write player profile: " + t.Exception);
+                else
+                    Debug.Log("[TreasureManager] Player profile initialized.");
+            });
+
+            // reset end-of-run values
             playerRef.Child("endAt").RemoveValueAsync();
             playerRef.Child("timeTakenMs").RemoveValueAsync();
+            playerRef.Child("elapsedTime").RemoveValueAsync(); // optional legacy
         }
 
-        
         var gameManager = GameManager.Instance;
         if (gameManager?.CurrentLevelTreasures != null && gameManager.CurrentLevelTreasures.Count > 0)
         {
             Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {gameManager.CurrentLevelTreasures.Count} treasures from level");
-
-            
             nextTreasureIndex = 0;
-
             InitializeTreasuresFromList(gameManager.CurrentLevelTreasures);
             return;
         }
@@ -841,33 +858,52 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         CancelInvoke(nameof(UpdateFinderState));
         StopListeningForTreasures();
 
-        if (!string.IsNullOrEmpty(authManager?.UserId) && !string.IsNullOrEmpty(currentRoomId))
+        if (string.IsNullOrEmpty(authManager?.UserId) || string.IsNullOrEmpty(currentRoomId))
         {
-            var playerRef = dbRef.Child("rooms").Child(currentRoomId).Child("players").Child(authManager.UserId);
-            playerRef.Child("endAt").SetValueAsync(ServerValue.Timestamp);
-
-            // Optional: compute with transaction if startAt exists on client-known path
-            playerRef.RunTransaction(mutable =>
-            {
-                if (mutable.Value is Dictionary<string, object> data &&
-                    data.TryGetValue("startAt", out object sObj) &&
-                    sObj != null)
-                {
-                    long start = Convert.ToInt64(sObj);
-
-                    // Can't read server timestamp directly in same txn as value.
-                    // So store a local fallback from device time:
-                    long endLocal = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    data["timeTakenMs"] = Math.Max(0, endLocal - start);
-                    mutable.Value = data;
-                    return TransactionResult.Success(mutable);
-                }
-                return TransactionResult.Success(mutable);
-            });
+            UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
+            return;
         }
 
-        // Load the scoreboard scene
-        UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
+        bool isSinglePlayer = currentRoomId.StartsWith("-");
+        DatabaseReference baseRef = isSinglePlayer
+            ? dbRef.Child("levels").Child(currentRoomId)
+            : dbRef.Child("rooms").Child(currentRoomId);
+
+        DatabaseReference playerRef = baseRef.Child("players").Child(authManager.UserId);
+
+        playerRef.GetValueAsync().ContinueWithOnMainThread(task =>
+        {
+            if (task.IsFaulted || task.IsCanceled || !task.Result.Exists)
+            {
+                Debug.LogWarning("[TreasureManager] Could not read player startAt, loading scoreboard anyway.");
+                UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
+                return;
+            }
+
+            long startMs = 0;
+            if (task.Result.HasChild("startAt"))
+                long.TryParse(task.Result.Child("startAt").Value?.ToString(), out startMs);
+
+            long endMs = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long takenMs = (startMs > 0) ? Mathf.Max(0, (int)(endMs - startMs)) : 0;
+
+            var updates = new Dictionary<string, object>
+        {
+            { "endAt", ServerValue.Timestamp },
+            { "timeTakenMs", (long)takenMs },
+            { "elapsedTime", (long)(takenMs / 1000L) } // optional legacy
+        };
+
+            playerRef.UpdateChildrenAsync(updates).ContinueWithOnMainThread(writeTask =>
+            {
+                if (writeTask.IsFaulted || writeTask.IsCanceled)
+                    Debug.LogWarning("[TreasureManager] Failed writing time: " + writeTask.Exception);
+                else
+                    Debug.Log($"[TreasureManager] Saved timeTakenMs={takenMs}");
+
+                UnityEngine.SceneManagement.SceneManager.LoadScene("ScoreboardScene");
+            });
+        });
     }
 
     // --- FINDER LOGIC ---

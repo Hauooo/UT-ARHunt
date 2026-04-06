@@ -1087,7 +1087,7 @@ public class CreatorMapController : MonoBehaviour
 
         foreach (var set in loadedSets.Values)
         {
-            options.Add($"{set.setName} ({set.treasures.Count} treasures)");
+            options.Add($"{set.setName}");
         }
 
         if (options.Count == 0)

@@ -3,6 +3,7 @@ using TMPro;
 using Firebase.Auth;
 using Firebase.Database;
 using Firebase.Extensions;
+using System.Collections.Generic;
 
 /// <summary>
 /// Manages player score and time from treasure collection.
@@ -28,6 +29,7 @@ public class ScoreManager : MonoBehaviour
 
     private float gameStartTime = 0f;
     private int secondsTaken = 0;
+    private bool finalResultSaved = false; // To prevent multiple saves on repeated EndGameTimer calls
 
     private void Awake()
     {
@@ -306,14 +308,16 @@ public class ScoreManager : MonoBehaviour
     /// </summary>
     public void EndGameTimer()
     {
-        if (gameStartTime <= 0)
+        if (finalResultSaved) return;
+        finalResultSaved = true;
+
+        if (gameStartTime <= 0f)
         {
             Debug.LogWarning("[ScoreManager] Game timer was never started!");
             return;
         }
 
         secondsTaken = Mathf.Max(0, (int)(Time.time - gameStartTime));
-        Debug.Log($"[ScoreManager] Game completed in {secondsTaken} seconds");
         SaveTimeToFirebase();
         UpdateScoreboardUI();
     }
@@ -362,6 +366,30 @@ public class ScoreManager : MonoBehaviour
                     Debug.LogError("[ScoreManager] Failed to save time: " + task.Exception);
                 }
             });
+    }
+
+    private void SaveFinalResult(string roomId, string uid, int finalScore, long finalTimeMs)
+    {
+        bool isSingle = roomId.StartsWith("-");
+        string root = isSingle ? "levels" : "rooms";
+
+        DatabaseReference baseRef = dbRef.Child(root).Child(roomId);
+        DatabaseReference scoreRef = baseRef.Child("scores").Child(uid);
+        DatabaseReference playerRef = baseRef.Child("players").Child(uid);
+
+        // Replace existing score value
+        scoreRef.SetValueAsync(finalScore);
+
+        // Replace existing timing fields
+        var updates = new Dictionary<string, object>
+    {
+        { "timeTakenMs", finalTimeMs },
+        { "elapsedTime", finalTimeMs / 1000L }, // optional legacy
+        { "endAt", ServerValue.Timestamp }
+    };
+        playerRef.UpdateChildrenAsync(updates);
+
+        Debug.Log($"[ResultSave] Replaced result for {uid}: score={finalScore}, timeMs={finalTimeMs}");
     }
 
     /// <summary>
