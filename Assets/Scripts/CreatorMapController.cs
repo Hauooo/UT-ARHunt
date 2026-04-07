@@ -996,7 +996,9 @@ public class CreatorMapController : MonoBehaviour
                         { "minigameId", treasure.challenge.minigameId ?? "" }
                         };
 
-                        if (treasure.challenge.type == ChallengeType.MCQ)
+                        // ← NEW: Handle both MCQ and ARMCQ
+                        if (treasure.challenge.type == ChallengeType.MCQ ||
+                            treasure.challenge.type == ChallengeType.ARMCQ)
                         {
                             challengeData["question"] = treasure.challenge.question ?? "";
 
@@ -1014,6 +1016,18 @@ public class CreatorMapController : MonoBehaviour
                             }
 
                             challengeData["options"] = optionsData;
+
+                            Debug.Log($"[UploadTreasure] Uploading {treasure.challenge.type} challenge: " +
+                                      $"question='{challengeData["question"]}', " +
+                                      $"options={optionsData.Count}");
+                        }
+                        // ← NEW: Log minigame challenges
+                        else if (treasure.challenge.type == ChallengeType.MemoryMatch ||
+                                 treasure.challenge.type == ChallengeType.OrderSequence)
+                        {
+                            Debug.Log($"[UploadTreasure] Uploading {treasure.challenge.type} challenge: " +
+                                      $"minigameId='{treasure.challenge.minigameId}', " +
+                                      $"timeLimit={treasure.challenge.timeLimitSeconds}s");
                         }
 
                         treasureData["challenge"] = challengeData;

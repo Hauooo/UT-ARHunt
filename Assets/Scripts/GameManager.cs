@@ -91,7 +91,12 @@ public class GameManager : MonoBehaviour
 
     private void OnEnable()
     {
-        SceneManager.sceneLoaded += OnSceneLoaded;
+        // ← NEW: Reset when scene loads
+        if (SceneManager.GetActiveScene().name == "ScoreboardScene")
+        {
+            Debug.Log("[ScoreManager] Scoreboard scene loaded, initializing...");
+            Start();  // Force re-initialization
+        }
     }
 
     private void OnDisable()
@@ -165,12 +170,40 @@ public class GameManager : MonoBehaviour
         CurrentRoomId = levelId;
         IsHost = true;
 
-        // Deep copy to avoid null/mutation side effects from source list
+        CurrentLevelTreasures?.Clear();
         CurrentLevelTreasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>();
+
+        TreasureKeys?.Clear();
         TreasureKeys = new Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string>();
 
-        foreach (var t in treasures)
+        for (int i = 0; i < treasures.Count; i++)
         {
+            var t = treasures[i];
+
+            // ← DEEP COPY challenge including options
+            ChallengeData challengeCopy = null;
+            if (t.challenge != null && t.challenge.type != ChallengeType.None)
+            {
+                challengeCopy = new ChallengeData
+                {
+                    type = t.challenge.type,
+                    question = t.challenge.question,
+                    bonusPoints = t.challenge.bonusPoints,
+                    maxAttempts = t.challenge.maxAttempts,
+                    minigameId = t.challenge.minigameId,
+                    timeLimitSeconds = t.challenge.timeLimitSeconds,
+                    // ← CRITICAL: Deep copy options list
+                    options = t.challenge.options != null
+                        ? new List<MCQOption>(t.challenge.options)
+                        : new List<MCQOption>()
+                };
+
+                Debug.Log($"[GameManager] Cloned challenge for '{t.name}': " +
+                          $"type={challengeCopy.type}, " +
+                          $"question='{challengeCopy.question}', " +
+                          $"options={challengeCopy.options.Count}");
+            }
+
             var copy = new TreasureManagerGPS_Multiplayer.TreasureData
             {
                 name = t.name,
@@ -179,10 +212,16 @@ public class GameManager : MonoBehaviour
                 points = t.points,
                 orderIndex = t.orderIndex,
                 collectedBy = t.collectedBy != null ? new Dictionary<string, bool>(t.collectedBy) : new Dictionary<string, bool>(),
-                challenge = CloneChallenge(t.challenge)
+                challenge = challengeCopy  // ← Use the cloned challenge
             };
 
             CurrentLevelTreasures.Add(copy);
+
+            // Generate unique key based on index
+            string uniqueKey = $"treasure_{i}";
+            TreasureKeys[copy] = uniqueKey;
+
+            Debug.Log($"[GameManager] Mapped '{copy.name}' -> {uniqueKey}");
         }
 
         Debug.Log($"[GameManager] Set game mode for level: {levelName} ({levelId}) with {CurrentLevelTreasures.Count} treasures");

@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using Firebase.Database;
 using Firebase.Extensions;
+using UnityEngine.SceneManagement;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -14,11 +15,6 @@ public class ScoreboardUIController : MonoBehaviour
     [Header("UI Buttons")]
     [SerializeField] private Button returnToMenuButton;
     [SerializeField] private Button shareScoreButton;
-
-    [Header("Top Summary (optional)")]
-    [SerializeField] private TextMeshProUGUI playerNameText;
-    [SerializeField] private TextMeshProUGUI finalScoreText;
-    [SerializeField] private TextMeshProUGUI timeTakenText;
 
     [Header("Scrollable Results List")]
     [SerializeField] private Transform resultsContent;   // ScrollView/Viewport/Content
@@ -39,14 +35,15 @@ public class ScoreboardUIController : MonoBehaviour
 
     private void Start()
     {
+        Debug.Log("[ScoreboardUI] Start() called");
         SetupButtons();
 
         dbRef = FirebaseDatabase.GetInstance(
             "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/")
             .RootReference;
 
-        LoadMySummary();
-        LoadScrollableResults();
+        // ← Wait for data to load
+        Invoke(nameof(LoadScrollableResults), 0.5f);
     }
 
     private void SetupButtons()
@@ -64,23 +61,21 @@ public class ScoreboardUIController : MonoBehaviour
         }
     }
 
-    private void LoadMySummary()
-    {
-        if (ScoreManager.Instance == null) return;
-
-        if (playerNameText != null) playerNameText.text = ScoreManager.Instance.GetPlayerName();
-        if (finalScoreText != null) finalScoreText.text = ScoreManager.Instance.GetScore().ToString();
-        if (timeTakenText != null) timeTakenText.text = ScoreManager.Instance.GetFormattedTime();
-    }
-
     private void LoadScrollableResults()
     {
+        Debug.Log("[ScoreboardUI] LoadScrollableResults() called");
+
         string roomId = GameManager.Instance?.CurrentRoomId;
         if (string.IsNullOrEmpty(roomId) || dbRef == null || resultsContent == null || resultRowPrefab == null)
+        {
+            Debug.LogError("[ScoreboardUI] Missing references for loading results");
             return;
+        }
 
         bool isSinglePlayer = roomId.StartsWith("-");
         string root = isSinglePlayer ? "levels" : "rooms";
+
+        Debug.Log($"[ScoreboardUI] Loading results from {root}/{roomId}");
 
         var playersRef = dbRef.Child(root).Child(roomId).Child("players");
         var scoresRef = dbRef.Child(root).Child(roomId).Child("scores");
@@ -89,7 +84,7 @@ public class ScoreboardUIController : MonoBehaviour
         {
             if (playersTask.IsFaulted || playersTask.IsCanceled || !playersTask.Result.Exists)
             {
-                Debug.LogWarning("[ScoreboardUI] Failed to load players.");
+                Debug.LogError("[ScoreboardUI] Failed to load players: " + playersTask.Exception);
                 return;
             }
 
@@ -156,9 +151,12 @@ public class ScoreboardUIController : MonoBehaviour
     private void BuildRows(List<ResultRowData> rows)
     {
         Debug.Log($"[ScoreboardUI] Building {rows.Count} rows");
+
+        // ← Clear old rows
         for (int i = resultsContent.childCount - 1; i >= 0; i--)
             Destroy(resultsContent.GetChild(i).gameObject);
 
+        // ← Build new rows
         foreach (var row in rows)
         {
             var go = Instantiate(resultRowPrefab, resultsContent);
@@ -169,9 +167,23 @@ public class ScoreboardUIController : MonoBehaviour
             var scoreText = go.transform.Find("ScoreText")?.GetComponent<TextMeshProUGUI>();
             var timeText = go.transform.Find("TimeText")?.GetComponent<TextMeshProUGUI>();
 
-            if (nameText != null) nameText.text = row.playerName;
-            if (scoreText != null) scoreText.text = row.score.ToString();
-            if (timeText != null) timeText.text = FormatTime(row.timeTakenMs);
+            if (nameText != null)
+            {
+                nameText.text = row.playerName;
+                Debug.Log($"[ScoreboardUI] Set NameText: {row.playerName}");
+            }
+
+            if (scoreText != null)
+            {
+                scoreText.text = row.score.ToString();
+                Debug.Log($"[ScoreboardUI] Set ScoreText: {row.score}");
+            }
+
+            if (timeText != null)
+            {
+                timeText.text = FormatTime(row.timeTakenMs);
+                Debug.Log($"[ScoreboardUI] Set TimeText: {FormatTime(row.timeTakenMs)}");
+            }
         }
     }
 
@@ -190,7 +202,7 @@ public class ScoreboardUIController : MonoBehaviour
         if (GameManager.Instance != null)
             GameManager.Instance.LeaveScoreboard();
         else
-            UnityEngine.SceneManagement.SceneManager.LoadScene("MenuScene");
+            SceneManager.LoadScene("MenuScene");
     }
 
     private void OnShareScoreClicked()
@@ -215,6 +227,7 @@ public class ScoreboardUIController : MonoBehaviour
         if (feedbackText != null)
         {
             feedbackText.text = message;
+            CancelInvoke(nameof(ClearFeedback));
             Invoke(nameof(ClearFeedback), 3f);
         }
     }

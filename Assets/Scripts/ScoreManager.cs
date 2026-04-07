@@ -3,6 +3,7 @@ using TMPro;
 using Firebase.Auth;
 using Firebase.Database;
 using Firebase.Extensions;
+using UnityEngine.SceneManagement;
 using System.Collections.Generic;
 
 /// <summary>
@@ -29,7 +30,7 @@ public class ScoreManager : MonoBehaviour
 
     private float gameStartTime = 0f;
     private int secondsTaken = 0;
-    private bool finalResultSaved = false; // To prevent multiple saves on repeated EndGameTimer calls
+    private bool finalResultSaved = false;
 
     private void Awake()
     {
@@ -45,33 +46,70 @@ public class ScoreManager : MonoBehaviour
 
     private void Start()
     {
-        if (authManager == null)
-            authManager = FindObjectOfType<AuthManager>();
+        // ← INITIALIZE FIREBASE FIRST
+        InitializeFirebase();
 
+        // ← INITIALIZE USER ID
         var user = FirebaseAuth.DefaultInstance?.CurrentUser;
-        cachedUserId = !string.IsNullOrEmpty(authManager?.UserId) ? authManager.UserId : user?.UserId;
-
-        if (string.IsNullOrEmpty(cachedUserId))
+        if (user != null)
         {
-            Debug.LogError("[ScoreManager] No user ID available from AuthManager or FirebaseAuth.");
-            return;
+            cachedUserId = user.UserId;
+            Debug.Log($"[ScoreManager] User ID cached: {cachedUserId}");
+        }
+        else
+        {
+            Debug.LogError("[ScoreManager] No user logged in!");
         }
 
-        if (authManager == null)
-            Debug.LogWarning("[ScoreManager] AuthManager missing, using FirebaseAuth fallback.");
+        // If scoreboard scene, load data
+        if (SceneManager.GetActiveScene().name == "ScoreboardScene")
+        {
+            Debug.Log("[ScoreManager] Start() called in ScoreboardScene");
+            InitializeScoreboard();
+        }
+    }
 
-        LoadPlayerName();
-        InitializeFirebase();
-        LoadScoreAndTimeFromFirebase();
+    private void OnEnable()
+    {
+        SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    public void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (scene.name == "ScoreboardScene")
+        {
+            Debug.Log("[ScoreManager] Scoreboard scene loaded, initializing fresh...");
+
+            // Ensure Firebase and user ID are set
+            if (dbRef == null)
+                InitializeFirebase();
+
+            if (string.IsNullOrEmpty(cachedUserId))
+            {
+                var user = FirebaseAuth.DefaultInstance?.CurrentUser;
+                if (user != null)
+                    cachedUserId = user.UserId;
+            }
+
+            InitializeScoreboard();
+        }
     }
 
     private void InitializeFirebase()
     {
+        if (dbRef != null) return; // Already initialized
+
         try
         {
             dbRef = FirebaseDatabase.GetInstance(
                 "https://ut-ar-treasure-hunt-default-rtdb.asia-southeast1.firebasedatabase.app/")
                 .RootReference;
+            Debug.Log("[ScoreManager] Firebase initialized");
         }
         catch (System.Exception ex)
         {
@@ -79,8 +117,19 @@ public class ScoreManager : MonoBehaviour
         }
     }
 
+    private void InitializeScoreboard()
+    {
+        Debug.Log("[ScoreManager] Initializing scoreboard...");
+
+        // ← LOAD PLAYER NAME FIRST
+        LoadPlayerName();
+
+        // ← THEN load score and time
+        LoadScoreAndTimeFromFirebase();
+    }
+
     /// <summary>
-    /// Get player name from Firebase DisplayName
+    /// Load player name from Firebase user or fallback
     /// </summary>
     private void LoadPlayerName()
     {
@@ -101,6 +150,8 @@ public class ScoreManager : MonoBehaviour
             Debug.LogWarning("[ScoreManager] No Firebase user found!");
             playerName = "Player";
         }
+
+        UpdateScoreboardUI();
     }
 
     /// <summary>
@@ -108,9 +159,24 @@ public class ScoreManager : MonoBehaviour
     /// </summary>
     private void LoadScoreAndTimeFromFirebase()
     {
-        if (dbRef == null || string.IsNullOrEmpty(cachedUserId) || GameManager.Instance == null)
+        // ← CHECK ALL PREREQUISITES
+        if (dbRef == null)
         {
-            Debug.LogWarning("[ScoreManager] Missing refs for loading score/time.");
+            Debug.LogError("[ScoreManager] Firebase not initialized");
+            UpdateScoreboardUI();
+            return;
+        }
+
+        if (string.IsNullOrEmpty(cachedUserId))
+        {
+            Debug.LogError("[ScoreManager] No user ID cached");
+            UpdateScoreboardUI();
+            return;
+        }
+
+        if (GameManager.Instance == null)
+        {
+            Debug.LogError("[ScoreManager] GameManager not found");
             UpdateScoreboardUI();
             return;
         }
@@ -119,7 +185,7 @@ public class ScoreManager : MonoBehaviour
 
         if (string.IsNullOrEmpty(roomId))
         {
-            Debug.LogWarning("[ScoreManager] Missing roomId.");
+            Debug.LogError("[ScoreManager] Missing roomId");
             UpdateScoreboardUI();
             return;
         }
@@ -130,12 +196,14 @@ public class ScoreManager : MonoBehaviour
             ? dbRef.Child("levels").Child(roomId).Child("scores").Child(cachedUserId)
             : dbRef.Child("rooms").Child(roomId).Child("scores").Child(cachedUserId);
 
+        Debug.Log($"[ScoreManager] Loading score from: {(isSinglePlayer ? "levels" : "rooms")}/{roomId}/scores/{cachedUserId}");
+
         scoreRef.GetValueAsync().ContinueWithOnMainThread(task =>
         {
             if (task.IsFaulted || task.IsCanceled)
             {
-                Debug.LogWarning("[ScoreManager] Error loading score: " + task.Exception);
-                LoadTimeFromFirebase();
+                Debug.LogError("[ScoreManager] Error loading score: " + task.Exception);
+                LoadTimeFromFirebase(roomId, isSinglePlayer);
                 return;
             }
 
@@ -151,33 +219,31 @@ public class ScoreManager : MonoBehaviour
                 currentScore = 0;
             }
 
-            LoadTimeFromFirebase();
+            LoadTimeFromFirebase(roomId, isSinglePlayer);
         });
     }
 
-    private void LoadTimeFromFirebase()
+    private void LoadTimeFromFirebase(string roomId, bool isSinglePlayer)
     {
         if (string.IsNullOrEmpty(cachedUserId))
         {
-            Debug.LogWarning("[ScoreManager] No user ID found");
+            Debug.LogError("[ScoreManager] No user ID");
             UpdateScoreboardUI();
             return;
         }
 
-        string gameRoomId = GameManager.Instance?.CurrentRoomId;
-
-        if (string.IsNullOrEmpty(gameRoomId))
+        if (dbRef == null)
         {
-            Debug.LogWarning("[ScoreManager] No room ID found");
+            Debug.LogError("[ScoreManager] Firebase not initialized");
             UpdateScoreboardUI();
             return;
         }
-
-        bool isSinglePlayer = gameRoomId.StartsWith("-");
 
         DatabaseReference playerRef = isSinglePlayer
-            ? dbRef.Child("levels").Child(gameRoomId).Child("players").Child(cachedUserId)
-            : dbRef.Child("rooms").Child(gameRoomId).Child("players").Child(cachedUserId);
+            ? dbRef.Child("levels").Child(roomId).Child("players").Child(cachedUserId)
+            : dbRef.Child("rooms").Child(roomId).Child("players").Child(cachedUserId);
+
+        Debug.Log($"[ScoreManager] Loading time from: {(isSinglePlayer ? "levels" : "rooms")}/{roomId}/players/{cachedUserId}");
 
         // 1) Try new schema first: timeTakenMs
         playerRef.Child("timeTakenMs").GetValueAsync().ContinueWithOnMainThread(taskMs =>
@@ -209,6 +275,7 @@ public class ScoreManager : MonoBehaviour
                 if (!taskLegacy.Result.Exists)
                 {
                     Debug.Log("[ScoreManager] No time found (timeTakenMs/elapsedTime). Using default: 0");
+                    secondsTaken = 0;
                     UpdateScoreboardUI();
                     return;
                 }
@@ -224,9 +291,6 @@ public class ScoreManager : MonoBehaviour
         });
     }
 
-    /// <summary>
-    /// Called when a treasure is collected (during gameplay)
-    /// </summary>
     public void AddTreasurePoints()
     {
         currentScore += pointsPerTreasure;
@@ -235,9 +299,6 @@ public class ScoreManager : MonoBehaviour
         UpdateScoreboardUI();
     }
 
-    /// <summary>
-    /// Add challenge bonus points (from MCQ/Minigame completion)
-    /// </summary>
     public void AddChallengeBonus(int bonusPoints)
     {
         if (bonusPoints <= 0)
@@ -252,9 +313,6 @@ public class ScoreManager : MonoBehaviour
         UpdateScoreboardUI();
     }
 
-    /// <summary>
-    /// Save score to Firebase after treasure/challenge completion
-    /// </summary>
     private void SaveScoreToFirebase()
     {
         if (dbRef == null || string.IsNullOrEmpty(cachedUserId))
@@ -296,18 +354,12 @@ public class ScoreManager : MonoBehaviour
             });
     }
 
-    /// <summary>
-    /// Start the game timer (call this when game begins)
-    /// </summary>
     public void StartGameTimer()
     {
         gameStartTime = Time.time;
         Debug.Log("[ScoreManager] Game timer started");
     }
 
-    /// <summary>
-    /// End the game timer and save time to Firebase
-    /// </summary>
     public void EndGameTimer()
     {
         if (finalResultSaved) return;
@@ -324,9 +376,6 @@ public class ScoreManager : MonoBehaviour
         UpdateScoreboardUI();
     }
 
-    /// <summary>
-    /// Save time to Firebase using new schema (timeTakenMs)
-    /// </summary>
     private void SaveTimeToFirebase()
     {
         if (dbRef == null || string.IsNullOrEmpty(cachedUserId))
@@ -370,57 +419,10 @@ public class ScoreManager : MonoBehaviour
             });
     }
 
-    private void SaveFinalResult(string roomId, string uid, int finalScore, long finalTimeMs)
-    {
-        bool isSingle = roomId.StartsWith("-");
-        string root = isSingle ? "levels" : "rooms";
+    public int GetScore() => currentScore;
+    public string GetPlayerName() => playerName;
+    public int GetTimeTakenSeconds() => secondsTaken;
 
-        DatabaseReference baseRef = dbRef.Child(root).Child(roomId);
-        DatabaseReference scoreRef = baseRef.Child("scores").Child(uid);
-        DatabaseReference playerRef = baseRef.Child("players").Child(uid);
-
-        // Replace existing score value
-        scoreRef.SetValueAsync(finalScore);
-
-        // Replace existing timing fields
-        var updates = new Dictionary<string, object>
-    {
-        { "timeTakenMs", finalTimeMs },
-        { "elapsedTime", finalTimeMs / 1000L }, // optional legacy
-        { "endAt", ServerValue.Timestamp }
-    };
-        playerRef.UpdateChildrenAsync(updates);
-
-        Debug.Log($"[ResultSave] Replaced result for {uid}: score={finalScore}, timeMs={finalTimeMs}");
-    }
-
-    /// <summary>
-    /// Get current score
-    /// </summary>
-    public int GetScore()
-    {
-        return currentScore;
-    }
-
-    /// <summary>
-    /// Get player name
-    /// </summary>
-    public string GetPlayerName()
-    {
-        return playerName;
-    }
-
-    /// <summary>
-    /// Get time taken in seconds
-    /// </summary>
-    public int GetTimeTakenSeconds()
-    {
-        return secondsTaken;
-    }
-
-    /// <summary>
-    /// Format time as MM:SS
-    /// </summary>
     public string GetFormattedTime()
     {
         int minutes = secondsTaken / 60;
@@ -428,14 +430,12 @@ public class ScoreManager : MonoBehaviour
         return $"{minutes:D2}:{seconds:D2}";
     }
 
-    /// <summary>
-    /// Reset score and time (for new game)
-    /// </summary>
     public void ResetScore()
     {
         currentScore = 0;
         secondsTaken = 0;
         gameStartTime = 0f;
+        finalResultSaved = false;
         UpdateScoreboardUI();
         Debug.Log("[ScoreManager] Score and time reset");
     }

@@ -18,7 +18,10 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private TMP_Text attemptsText;
     [SerializeField] private TMP_Text resultText;
 
-
+    [Header("AR Minigames")]
+    [SerializeField] private MemoryMatchManager memoryMatchManager;
+    [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
+    [SerializeField] private ArMCQManager arMcqManager;  // ← ADD THIS
 
     [Header("Minigame UI")]
     [SerializeField] private GameObject minigamePanel;
@@ -26,9 +29,7 @@ public class ChallengeRunner : MonoBehaviour
     [SerializeField] private TMP_Text timerText;
     [SerializeField] private Button launchMinigameButton;
 
-    [Header("AR Minigames")]
-    [SerializeField] private MemoryMatchManager memoryMatchManager;
-    [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
+
 
 
     [Header("Shared")]
@@ -91,6 +92,10 @@ public class ChallengeRunner : MonoBehaviour
                 ShowMCQ(challenge); // pure 2D MCQ
                 break;
 
+            case ChallengeType.ARMCQ:  // ← ADD THIS
+                ShowARMCQ(challenge); // AR-based MCQ
+                break;
+
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
                 ShowMinigameLauncher(challenge);
@@ -115,6 +120,7 @@ public class ChallengeRunner : MonoBehaviour
             StartCoroutine(DelayedComplete(false, 0));
             return;
         }
+
 
         if (string.IsNullOrEmpty(challenge.question))
         {
@@ -181,9 +187,77 @@ public class ChallengeRunner : MonoBehaviour
         }
     }
 
-    
+    // ---------------- AR MCQ ----------------
 
-    
+    private void ShowARMCQ(ChallengeData challenge)
+    {
+        if (challenge == null || challenge.type != ChallengeType.ARMCQ)
+        {
+            resultText.text = "Invalid AR MCQ challenge data";
+            Debug.LogError("[ChallengeRunner] Invalid AR MCQ challenge");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
+        if (string.IsNullOrEmpty(challenge.question))
+        {
+            resultText.text = "❌ Question missing";
+            Debug.LogError("[ChallengeRunner] AR MCQ question is missing");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
+        if (challenge.options == null || challenge.options.Count == 0)
+        {
+            resultText.text = "❌ Options missing";
+            Debug.LogError("[ChallengeRunner] AR MCQ options missing. Need at least 2 options.");
+            StartCoroutine(DelayedComplete(false, 0));
+            return;
+        }
+
+        if (challenge.bonusPoints <= 0)
+        {
+            Debug.LogWarning("[ChallengeRunner] AR MCQ bonus points not set, defaulting to 100");
+            challenge.bonusPoints = 100;
+        }
+
+        if (arMcqManager == null)
+        {
+            Debug.LogError("[ChallengeRunner] ArMCQManager not assigned. Falling back to 2D MCQ.");
+            challenge.type = ChallengeType.MCQ;
+            ShowMCQ(challenge);
+            return;
+        }
+
+        // Hide 2D panels
+        mcqPanel.SetActive(false);
+        minigamePanel.SetActive(false);
+        challengePanel.SetActive(false);
+
+        Debug.Log($"[ChallengeRunner] Starting AR MCQ: '{challenge.question}' with {challenge.options.Count} options");
+
+        // Start AR MCQ
+        arMcqManager.StartARMCQ(challenge, OnARMCQComplete);
+    }
+
+    private void OnARMCQComplete(bool success, int bonus)
+    {
+        // Handle fallback from AR to 2D MCQ
+        if (ArMCQManager.IsARFallbackResult(success, bonus))
+        {
+            Debug.Log("[ChallengeRunner] AR unavailable, falling back to 2D MCQ");
+            challengePanel.SetActive(true);
+            mcqPanel.SetActive(true);
+            currentChallenge.type = ChallengeType.MCQ;
+            ShowMCQ(currentChallenge);
+            return;
+        }
+
+        // Normal completion
+        OnChallengeComplete(success, bonus);
+    }
+
+
 
     // ---------------- Minigames ----------------
 

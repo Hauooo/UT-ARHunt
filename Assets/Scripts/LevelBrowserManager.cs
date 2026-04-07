@@ -622,7 +622,9 @@ public class LevelBrowserManager : MonoBehaviour
                     minigameId = challengeSnapshot.Child("minigameId").Value?.ToString() ?? ""
                 };
 
-                if (challengeType == ChallengeType.MCQ && challengeSnapshot.HasChild("options"))
+                // ← FIXED: Support both MCQ and ARMCQ
+                if ((challengeType == ChallengeType.MCQ || challengeType == ChallengeType.ARMCQ)
+                    && challengeSnapshot.HasChild("options"))
                 {
                     challenge.question = challengeSnapshot.Child("question").Value?.ToString() ?? "";
                     challenge.options = new List<MCQOption>();
@@ -635,10 +637,26 @@ public class LevelBrowserManager : MonoBehaviour
                             isCorrect = bool.Parse(optionSnapshot.Child("isCorrect").Value?.ToString() ?? "false")
                         });
                     }
+
+                    Debug.Log($"[LevelBrowser] Loaded {challenge.options.Count} options for {challengeType}");
+                }
+                else if ((challengeType == ChallengeType.MCQ || challengeType == ChallengeType.ARMCQ)
+                         && !challengeSnapshot.HasChild("options"))
+                {
+                    // MCQ/ARMCQ without options
+                    challenge.question = challengeSnapshot.Child("question").Value?.ToString() ?? "";
+                    challenge.options = new List<MCQOption>();
+                    Debug.LogWarning($"[LevelBrowser] {challengeType} has no options!");
+                }
+                else if (challengeType == ChallengeType.MemoryMatch || challengeType == ChallengeType.OrderSequence)
+                {
+                    // Minigames don't need question/options
+                    Debug.Log($"[LevelBrowser] Loaded {challengeType} minigame");
                 }
 
                 treasure.challenge = challenge;
-                Debug.Log($"[LevelBrowser] Parsed challenge for treasure: {treasure.name} (type: {challengeType})");
+                Debug.Log($"[LevelBrowser] Parsed challenge for treasure: {treasure.name} (type: {challengeType}, " +
+                          $"question: '{challenge.question}', options: {challenge.options?.Count ?? 0})");
             }
 
             return treasure;
