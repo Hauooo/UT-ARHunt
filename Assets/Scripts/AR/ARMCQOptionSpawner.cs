@@ -1,12 +1,9 @@
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
+using UnityEngine.Events;
 using System.Collections;
 using System.Collections.Generic;
 
-/// <summary>
-/// Detects AR planes and spawns MCQ option prefabs on a single plane,
-/// arranging them randomly across the surface.
-/// </summary>
 public class ARMCQOptionSpawner : MonoBehaviour
 {
     [Header("References")]
@@ -16,22 +13,20 @@ public class ARMCQOptionSpawner : MonoBehaviour
     [SerializeField] private GameObject mcqOptionPrefab;
 
     [Header("Spawn Settings")]
-    [SerializeField] private float heightAbovePlane = 0.05f;
-    [SerializeField] private float minSpacing = 0.3f; // Minimum distance between options
-    [SerializeField] private float edgePadding = 0.2f; // Distance from plane edge
+    [SerializeField] private float heightAbovePlane = 1.0f;
+    [SerializeField] private float gridSpacing = 0.6f;  // ← Distance between options in grid
+    [SerializeField] private float edgePadding = 0.2f;
 
     [Header("Detection Timeout")]
     [SerializeField] private float detectionTimeoutSeconds = 30f;
 
     private readonly List<MCQOption> pendingOptions = new List<MCQOption>();
-    private readonly List<MCQOptionUI> spawnedOptions = new List<MCQOptionUI>();
+    private readonly List<ARMCQOptionBehaviour> spawnedOptions = new List<ARMCQOptionBehaviour>();
     private bool hasSpawned;
     private Coroutine timeoutCoroutine;
+    private System.Action<bool> optionSelectionCallback;
 
-    /// <summary>Fired once all options have been successfully spawned.</summary>
     public System.Action OnAllOptionsSpawned;
-
-    /// <summary>Fired if no plane is detected within the timeout window.</summary>
     public System.Action OnDetectionTimeout;
 
     private void OnEnable()
@@ -51,11 +46,7 @@ public class ARMCQOptionSpawner : MonoBehaviour
         StopAllCoroutines();
     }
 
-    /// <summary>
-    /// Begin watching for planes and attempt to spawn <paramref name="options"/>
-    /// randomly on a single plane.
-    /// </summary>
-    public void BeginSpawning(List<MCQOption> options)
+    public void BeginSpawning(List<MCQOption> options, System.Action<bool> onOptionSelected = null)
     {
         if (options == null || options.Count == 0)
         {
@@ -63,13 +54,15 @@ public class ARMCQOptionSpawner : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[ARMCQOptionSpawner] BeginSpawning with {options.Count} options randomly");
+        Debug.Log($"[ARMCQOptionSpawner] BeginSpawning with {options.Count} options in 2x2 grid");
 
         hasSpawned = false;
         ClearOptions();
 
         pendingOptions.Clear();
         pendingOptions.AddRange(options);
+
+        optionSelectionCallback = onOptionSelected;
 
         if (planeManager == null)
         {
@@ -80,9 +73,9 @@ public class ARMCQOptionSpawner : MonoBehaviour
         if (!planeManager.enabled)
             planeManager.enabled = true;
 
+
         timeoutCoroutine = StartCoroutine(DetectionTimeoutCoroutine());
 
-        // If a plane is already tracked, spawn immediately
         foreach (var plane in planeManager.trackables)
         {
             if (TrySpawnOnPlane(plane))
@@ -95,9 +88,6 @@ public class ARMCQOptionSpawner : MonoBehaviour
         Debug.Log("[ARMCQOptionSpawner] No suitable plane found yet, waiting...");
     }
 
-    /// <summary>
-    /// Remove all previously spawned option objects from the scene.
-    /// </summary>
     public void ClearOptions()
     {
         foreach (var opt in spawnedOptions)
@@ -109,25 +99,18 @@ public class ARMCQOptionSpawner : MonoBehaviour
         Debug.Log("[ARMCQOptionSpawner] Cleared all options");
     }
 
-    /// <summary>
-    /// All currently spawned <see cref="MCQOptionUI"/> instances.
-    /// </summary>
-    public IReadOnlyList<MCQOptionUI> SpawnedOptions => spawnedOptions;
-
-    // ─── Private helpers ─────────────────────────────────────────────────────
+    public IReadOnlyList<ARMCQOptionBehaviour> SpawnedOptions => spawnedOptions;
 
     private void OnPlanesChanged(ARTrackablesChangedEventArgs<ARPlane> args)
     {
         if (hasSpawned) return;
 
-        // Try newly added planes
         foreach (var plane in args.added)
         {
             if (TrySpawnOnPlane(plane))
                 return;
         }
 
-        // Also try updated planes (they might have grown and become suitable)
         foreach (var plane in args.updated)
         {
             if (TrySpawnOnPlane(plane))
@@ -141,18 +124,14 @@ public class ARMCQOptionSpawner : MonoBehaviour
         if (plane == null) return false;
         if (pendingOptions == null || pendingOptions.Count == 0) return false;
 
-        // Only horizontal planes are suitable for placing options
         if (plane.alignment != UnityEngine.XR.ARSubsystems.PlaneAlignment.HorizontalUp &&
             plane.alignment != UnityEngine.XR.ARSubsystems.PlaneAlignment.HorizontalDown)
             return false;
 
-        // ← Check minimum plane size
         Vector3 extents = plane.extents;
-        float minRequiredSize = 0.2f; // At least 20cm
-        
-        // Accept if at least one dimension is large enough
+        float minRequiredSize = 0.2f;
         bool hasMinSize = (extents.x >= minRequiredSize) || (extents.z >= minRequiredSize);
-        
+
         if (!hasMinSize)
         {
             Debug.Log($"[ARMCQOptionSpawner] Plane too small: {extents.x:F3}x{extents.z:F3}m, waiting...");
@@ -171,79 +150,60 @@ public class ARMCQOptionSpawner : MonoBehaviour
 
         SpawnOptionsOnPlane(plane, pendingOptions);
         OnAllOptionsSpawned?.Invoke();
-        Debug.Log($"[ARMCQOptionSpawner] ✓ Successfully spawned {pendingOptions.Count} options randomly on one plane");
+        Debug.Log($"[ARMCQOptionSpawner] ✓ Successfully spawned {pendingOptions.Count} options in 2x2 grid");
         return true;
     }
 
     private void SpawnOptionsOnPlane(ARPlane plane, List<MCQOption> options)
     {
         Vector3 planeCenter = plane.center;
-        Vector3 extents = plane.extents;
 
-        // Calculate plane bounds with padding
-        float minX = planeCenter.x - (extents.x / 2f) + edgePadding;
-        float maxX = planeCenter.x + (extents.x / 2f) - edgePadding;
-        float minZ = planeCenter.z - (extents.z / 2f) + edgePadding;
-        float maxZ = planeCenter.z + (extents.z / 2f) - edgePadding;
+        Camera mainCamera = Camera.main;
+        float cameraHeight = mainCamera != null ? mainCamera.transform.position.y : 0f;
+        float spawnHeight = cameraHeight + heightAbovePlane;
 
-        Debug.Log($"[ARMCQOptionSpawner] Plane bounds: X[{minX:F2}, {maxX:F2}], Z[{minZ:F2}, {maxZ:F2}]");
+        Debug.Log($"[ARMCQOptionSpawner] Camera height: {cameraHeight}, spawn height: {spawnHeight}");
 
-        List<Vector3> spawnPositions = new List<Vector3>();
+        // ← 2x2 GRID LAYOUT
+        Vector3 cameraForward = mainCamera != null ? mainCamera.transform.forward : Vector3.forward;
+        Vector3 cameraRight = mainCamera != null ? mainCamera.transform.right : Vector3.right;
 
-        // Generate random positions for each option
-        int maxAttempts = 100;
-        int attempts = 0;
+        // Position grid 2m in front of camera
+        float distanceFromCamera = 2.0f;
+        Vector3 gridCenter = mainCamera.transform.position + cameraForward * distanceFromCamera;
+        gridCenter.y = spawnHeight;
 
-        for (int i = 0; i < options.Count; i++)
+        // Grid positions (2x2)
+        Vector3[] gridPositions = new Vector3[4];
+        gridPositions[0] = gridCenter + cameraRight * (-gridSpacing / 2f) + Vector3.up * (gridSpacing / 2f);  // Top-left
+        gridPositions[1] = gridCenter + cameraRight * (gridSpacing / 2f) + Vector3.up * (gridSpacing / 2f);   // Top-right
+        gridPositions[2] = gridCenter + cameraRight * (-gridSpacing / 2f) + Vector3.up * (-gridSpacing / 2f); // Bottom-left
+        gridPositions[3] = gridCenter + cameraRight * (gridSpacing / 2f) + Vector3.up * (-gridSpacing / 2f);  // Bottom-right
+
+        for (int i = 0; i < options.Count && i < 4; i++)
         {
-            Vector3 randomPos = Vector3.zero;
-            bool validPosition = false;
-            attempts = 0;
+            Vector3 worldPos = gridPositions[i];
 
-            // Keep trying until we find a valid position (not too close to other options)
-            while (!validPosition && attempts < maxAttempts)
+            Debug.Log($"[ARMCQOptionSpawner] Option {i + 1}: worldPos={worldPos}");
+
+            GameObject obj = Instantiate(mcqOptionPrefab, worldPos, Quaternion.identity);
+            ARMCQOptionBehaviour option = obj.GetComponent<ARMCQOptionBehaviour>();
+
+            if (option != null)
             {
-                randomPos = new Vector3(
-                    Random.Range(minX, maxX),
-                    planeCenter.y + heightAbovePlane,
-                    Random.Range(minZ, maxZ)
-                );
-
-                // Check distance from all previously spawned options
-                validPosition = true;
-                foreach (var existingPos in spawnPositions)
+                UnityEvent<bool> unityCallback = new UnityEvent<bool>();
+                if (optionSelectionCallback != null)
                 {
-                    float distance = Vector3.Distance(randomPos, existingPos);
-                    if (distance < minSpacing)
-                    {
-                        validPosition = false;
-                        break;
-                    }
+                    unityCallback.AddListener(new UnityAction<bool>(optionSelectionCallback));
                 }
 
-                attempts++;
-            }
-
-            if (!validPosition)
-            {
-                Debug.LogWarning($"[ARMCQOptionSpawner] Could not find valid position for option {i + 1} after {maxAttempts} attempts");
-                continue;
-            }
-
-            spawnPositions.Add(randomPos);
-
-            GameObject obj = Instantiate(mcqOptionPrefab, randomPos, Quaternion.identity);
-            MCQOptionUI ui = obj.GetComponent<MCQOptionUI>();
-
-            if (ui != null)
-            {
-                ui.Setup(options[i].text, options[i].isCorrect);
-                spawnedOptions.Add(ui);
-                Debug.Log($"[ARMCQOptionSpawner] Spawned option {i + 1}/{options.Count}: '{options[i].text}' at {randomPos}");
+                option.Setup(options[i].text, options[i].isCorrect, unityCallback);
+                spawnedOptions.Add(option);
+                Debug.Log($"[ARMCQOptionSpawner] Spawned option {i + 1}/{options.Count}: '{options[i].text}' at {worldPos}");
             }
             else
             {
-                Debug.LogError($"[ARMCQOptionSpawner] MCQOptionUI not found on prefab instance!");
+                Debug.LogError($"[ARMCQOptionSpawner] ARMCQOptionBehaviour not found on prefab instance!");
                 Destroy(obj);
             }
         }
@@ -258,7 +218,6 @@ public class ARMCQOptionSpawner : MonoBehaviour
         {
             if (hasSpawned) yield break;
 
-            // Retry against any currently tracked plane each frame
             if (planeManager != null && planeManager.trackables.count > 0)
             {
                 foreach (var plane in planeManager.trackables)

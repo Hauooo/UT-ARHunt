@@ -61,21 +61,21 @@ public class ArMCQManager : MonoBehaviour
 
         if (!arAvailable)
         {
-            // AR components not assigned – skip straight to screen fallback
             NotifyFallback();
             return;
         }
 
-        SetStatus("📷 Scan a flat surface to place the answers…");
+        SetStatus("Scan a flat surface to place the answers…");
 
-        // Shuffle options so the correct answer is not always in the same slot
         var shuffled = currentChallenge.options.OrderBy(_ => Random.value).ToList();
 
-        // ← FIXED: Changed OnOptionsSpawned to OnAllOptionsSpawned
         optionSpawner.OnAllOptionsSpawned += OnOptionsSpawned;
         optionSpawner.OnDetectionTimeout += OnDetectionTimeout;
-        optionSpawner.BeginSpawning(shuffled);
+
+        // ← Now passing callback with 2 arguments
+        optionSpawner.BeginSpawning(shuffled, HandleOptionSelected);
     }
+
 
     /// <summary>
     /// Stop and clean up everything (called by ChallengeRunner when needed).
@@ -86,7 +86,6 @@ public class ArMCQManager : MonoBehaviour
 
         if (optionSpawner != null)
         {
-            // ← FIXED: Changed OnOptionsSpawned to OnAllOptionsSpawned
             optionSpawner.OnAllOptionsSpawned -= OnOptionsSpawned;
             optionSpawner.OnDetectionTimeout -= OnDetectionTimeout;
             optionSpawner.ClearOptions();
@@ -106,7 +105,7 @@ public class ArMCQManager : MonoBehaviour
         foreach (var opt in optionSpawner.SpawnedOptions)
         {
             if (opt != null)
-                opt.OnSelected += HandleOptionSelected;
+                opt.SetInteractionEnabled(true);
         }
     }
 
@@ -141,28 +140,34 @@ public class ArMCQManager : MonoBehaviour
         Camera cam = Camera.main;
         if (cam == null) return;
 
-        // Try AR raycast first (hits AR tracked objects)
-        if (arRaycastManager != null &&
-            arRaycastManager.Raycast(screenPos, raycastHits,
-                UnityEngine.XR.ARSubsystems.TrackableType.PlaneWithinBounds))
-        {
-            // AR raycast found a plane hit – but we still need to check if a
-            // spawned option collider was hit via the regular Physics raycast.
-        }
-
         // Physics raycast to detect taps on 3D option colliders
         Ray ray = cam.ScreenPointToRay(screenPos);
-        if (Physics.Raycast(ray, out RaycastHit hit))
+
+        // ← Increased raycast distance to 100m
+        if (Physics.Raycast(ray, out RaycastHit hit, 100f))
         {
-            MCQOptionUI option = hit.collider.GetComponent<MCQOptionUI>();
+            Debug.Log($"[ArMCQManager] Raycast hit: {hit.collider.gameObject.name}");
+
+            ARMCQOptionBehaviour option = hit.collider.GetComponent<ARMCQOptionBehaviour>();
             if (option != null)
+            {
+                Debug.Log($"[ArMCQManager] Found ARMCQOptionBehaviour, calling OnTapped()");
                 option.OnTapped();
+            }
+            else
+            {
+                Debug.LogWarning($"[ArMCQManager] Hit object but no ARMCQOptionBehaviour: {hit.collider.gameObject.name}");
+            }
+        }
+        else
+        {
+            Debug.Log("[ArMCQManager] Raycast missed");
         }
     }
 
     // ─── Answer handling ──────────────────────────────────────────────────────
 
-    private void HandleOptionSelected(MCQOptionUI selected)
+    private void HandleOptionSelected(bool isCorrect)
     {
         if (!waitingForTap) return;
         waitingForTap = false;
@@ -177,7 +182,7 @@ public class ArMCQManager : MonoBehaviour
             }
         }
 
-        if (selected.IsCorrect)
+        if (isCorrect)
         {
             SetStatus("Correct!");
             StartCoroutine(FinishAfterDelay(true, currentChallenge.bonusPoints, 1.5f));
@@ -210,8 +215,8 @@ public class ArMCQManager : MonoBehaviour
         // Shuffle options again for the retry
         var shuffled = currentChallenge.options.OrderBy(_ => Random.value).ToList();
 
-        optionSpawner.BeginSpawning(shuffled);
-        SetStatus("📷 Scan a flat surface to place the answers…");
+        optionSpawner.BeginSpawning(shuffled, HandleOptionSelected);
+        SetStatus(" Scan a flat surface to place the answers…");
     }
 
     private IEnumerator FinishAfterDelay(bool success, int bonus, float delay)
