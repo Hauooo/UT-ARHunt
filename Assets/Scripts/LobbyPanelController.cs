@@ -29,6 +29,8 @@ public class LobbyPanelController : MonoBehaviour
             }
         }
 
+        EnsureVerticalLayoutGroup();
+
         if (roomCodeText == null) Debug.LogError("[LobbyPanelController] roomCodeText not assigned.");
         if (startGameButton == null) Debug.LogError("[LobbyPanelController] startGameButton not assigned.");
         if (leaveButton == null) Debug.LogError("[LobbyPanelController] leaveButton not assigned.");
@@ -70,6 +72,40 @@ public class LobbyPanelController : MonoBehaviour
             GameManager.Instance.OnLobbyReady -= HandleLobbyReady;
             GameManager.Instance.OnPlayerListUpdated -= HandlePlayerListUpdated;
         }
+    }
+
+    private void EnsureVerticalLayoutGroup()
+    {
+        if (playerListContent == null) return;
+
+        // Get or add VerticalLayoutGroup
+        VerticalLayoutGroup vlg = playerListContent.GetComponent<VerticalLayoutGroup>();
+        if (vlg == null)
+        {
+            vlg = playerListContent.gameObject.AddComponent<VerticalLayoutGroup>();
+            Debug.Log("[LobbyPanelController] Added VerticalLayoutGroup to playerListContent");
+        }
+
+        // Configure layout group
+        vlg.childForceExpandWidth = false;
+        vlg.childForceExpandHeight = false;
+        vlg.childControlWidth = false;
+        vlg.childControlHeight = true;
+        vlg.spacing = 15f;
+        vlg.padding = new RectOffset(10, 10, 10, 10);
+
+        // Get or add LayoutElement to container
+        LayoutElement le = playerListContent.GetComponent<LayoutElement>();
+        if (le == null)
+        {
+            le = playerListContent.gameObject.AddComponent<LayoutElement>();
+            Debug.Log("[LobbyPanelController] Added LayoutElement to playerListContent");
+        }
+
+        le.preferredHeight = 400f;
+        le.preferredWidth = 300f;
+
+        Debug.Log("[LobbyPanelController] VerticalLayoutGroup configured");
     }
 
     private void HandleLobbyReady(string roomId, bool isHost)
