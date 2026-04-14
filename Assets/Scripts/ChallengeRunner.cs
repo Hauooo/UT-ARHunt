@@ -286,10 +286,18 @@ public class ChallengeRunner : MonoBehaviour
             case "MemoryMatch":
                 if (memoryMatchManager != null)
                 {
-                    challengePanel.SetActive(false);
-                    memoryMatchManager.StartGame(challenge, success => OnMinigameResult(success, success ? currentChallenge.bonusPoints : 0));
+                    Debug.Log("[ChallengeRunner] Starting Memory Match game");
+                    memoryMatchManager.StartGame(challenge, (success) =>
+                    {
+                        Debug.Log($"[ChallengeRunner] Memory Match result: {success}");
+                        OnMinigameResult(success, success ? currentChallenge.bonusPoints : 0);
+                    });
                     yield break;
                 }
+                Debug.LogError("[ChallengeRunner] memoryMatchManager is NULL");
+                OnMinigameResult(false, 0);
+                yield break;
+        
                 OnMinigameResult(false, 0);
                 yield break;
 

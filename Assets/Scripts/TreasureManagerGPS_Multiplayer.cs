@@ -113,6 +113,11 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Debug.Log($"[TreasureManager] collectButton assigned: {collectButton != null}");
         Debug.Log($"[TreasureManager] arrowIndicator assigned: {arrowIndicator != null}");
 
+        if (collectButton != null)
+        {
+            collectButton.gameObject.SetActive(false);
+        }
+
         authManager = AuthManager.Instance;
         locationManager = LocationManager.Instance;
 
@@ -122,7 +127,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             return;
         }
 
-        // ← NEW: Auto-find ChallengeRunner if not assigned
+        
         if (challengeRunner == null)
         {
             challengeRunner = FindObjectOfType<ChallengeRunner>();
@@ -153,7 +158,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private void Awake()
     {
-        // Optional if you already have Awake, merge this block there
+        
         if (quitConfirmPanel != null) quitConfirmPanel.SetActive(false);
 
         if (quitConfirmYesButton != null)
@@ -220,7 +225,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Initializing for room: {roomId}");
         currentRoomId = roomId;
 
-        // ← Reset state for fresh level play
+        
         ResetForNewLevel();
 
         // Ensure deps FIRST
@@ -624,7 +629,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         TreasureData newData = ParseTreasureDataFromSnapshot(args.Snapshot);
         localTreasures[key].data = newData;
 
-        // Check if treasure has been marked as collected (disappears for everyone)
+        
         bool isMarkedCollected = false;
 
         // Try to get isCollected flag from the snapshot
@@ -636,7 +641,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 isMarkedCollected = boolVal;
         }
 
-        // If treasure is marked as collected, disappear for everyone
+        
         if (!isMarkedCollected) return;
 
         LogToUI($"Treasure '{newData.name}' was collected!");
@@ -660,7 +665,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         localTreasures.Remove(key);
     }
 
-    private void CollectTargetTreasure()
+    public void CollectTargetTreasure()
     {
         if (isExitingLevel) return;
         Debug.Log("[Collect] CollectTargetTreasure() called");
@@ -689,7 +694,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             return;
         }
 
-        // ── NEW: Check if this checkpoint has a challenge ─────────────────────
+        // ── Check if this checkpoint has a challenge ─────────────────────
         bool hasChallenge = target.data.challenge != null
                  && target.data.challenge.type != ChallengeType.None;
 
@@ -1232,7 +1237,17 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon | TrackableType.PlaneEstimated))
         {
             Pose hitPose = hits[0].pose;
-            target.instance = Instantiate(treasurePrefab, hitPose.position, hitPose.rotation);
+            Quaternion rotatedRotation = hitPose.rotation * Quaternion.Euler(-90, 0, 0);
+            target.instance = Instantiate(treasurePrefab, hitPose.position, rotatedRotation);
+
+            var tapHandler = target.instance.GetComponent<TreasureARTapHandler>();
+            if (tapHandler == null)
+            {
+                tapHandler = target.instance.AddComponent<TreasureARTapHandler>();
+                Debug.Log("[TreasureManager] Added TreasureARTapHandler to spawned treasure");
+            }
+
+            Debug.Log($"[TreasureManager] Spawned treasure instance: {target.instance.name}");
         }
     }
 
@@ -1349,14 +1364,12 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     private void UpdateUIElements()
     {
         if (mode != PlayerMode.Finder) return;
-        if (distanceLabel == null || arrowIndicator == null || collectButton == null || statusText == null) return;
+        if (distanceLabel == null || arrowIndicator == null || statusText == null) return;
 
         if (string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey))
         {
             distanceLabel.text = "Searching...";
             arrowIndicator.gameObject.SetActive(false);
-            collectButton.gameObject.SetActive(false);
-
             statusText.text = localTreasures.Count == 0 ? "No active treasures found." : "Finding closest treasure...";
             return;
         }
@@ -1374,17 +1387,31 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             distanceToShow = Vector3.Distance(Camera.main.transform.position, target.instance.transform.position);
             direction = target.instance.transform.position - Camera.main.transform.position;
 
-            bool inCollectRange = distanceToShow <= collectDistance;
-            collectButton.gameObject.SetActive(inCollectRange);
-            collectButton.interactable = inCollectRange && !isCollectInProgress;
+            // ← Show prompt when close to treasure
+            bool isNearby = distanceToShow <= collectDistance;
+
+            // Find and update the tap prompt text
+            var tapHandler = target.instance.GetComponent<TreasureARTapHandler>();
+            if (tapHandler != null)
+            {
+                var promptText = target.instance.GetComponentInChildren<TextMeshProUGUI>();
+                if (promptText != null)
+                {
+                    promptText.gameObject.SetActive(isNearby);
+
+                    if (isNearby)
+                    {
+                        // Optional: pulsing effect
+                        float pulse = Mathf.Sin(Time.time * 3f) * 0.5f + 0.5f;
+                        promptText.alpha = 0.7f + (pulse * 0.3f);
+                    }
+                }
+            }
         }
         else
         {
             distanceToShow = targetGpsPos.magnitude;
             direction = targetGpsPos;
-
-            collectButton.gameObject.SetActive(false);
-            collectButton.interactable = false;
         }
 
         distanceLabel.text = $"{distanceToShow:F1} m";

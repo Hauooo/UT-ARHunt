@@ -212,12 +212,12 @@ public class MemoryMatchManager : MonoBehaviour
         if (success)
         {
             if (matchesText != null)
-                matchesText.text = "🎉 You Won!";
+                matchesText.text = "You Won!";
         }
         else
         {
             if (matchesText != null)
-                matchesText.text = "⏰ Time's Up!";
+                matchesText.text = "Time's Up!";
         }
 
         Invoke(nameof(HideGame), 1.5f);
