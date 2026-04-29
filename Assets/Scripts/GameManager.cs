@@ -45,6 +45,10 @@ public class GameManager : MonoBehaviour
     public event Action<string> OnJoinFailed;
     public Dictionary<string, PlayerData> CurrentPlayers { get; private set; } = new Dictionary<string, PlayerData>();
 
+    public List<TreasureManagerGPS_Multiplayer.TreasureData> CurrentLevelTreasures { get; set; }
+    public Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string> TreasureKeys { get; set; }
+    public float CurrentLevelTimerSeconds { get; set; } = 300f; // Default 5 minutes
+
     // --- Private State ---
     private DatabaseReference dbRef;
     private bool isFirebaseReady = false;
@@ -244,10 +248,9 @@ public class GameManager : MonoBehaviour
         };
     }
 
-    public Dictionary<TreasureManagerGPS_Multiplayer.TreasureData, string> TreasureKeys { get; set; }
+    
 
-    // Add this field to GameManager
-    public List<TreasureManagerGPS_Multiplayer.TreasureData> CurrentLevelTreasures { get; set; }
+
 
     private string GetSafeDisplayName(string fallback)
     {

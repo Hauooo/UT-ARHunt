@@ -103,6 +103,9 @@ public class CreatorMapController : MonoBehaviour
     [SerializeField] private TMP_Dropdown newCollectionModeDropdown;  // ← For New Set
     [SerializeField] private TMP_Dropdown editCollectionModeDropdown; // ← For Edit Set
 
+    [Header("Map Pan/Zoom")]
+    [SerializeField] private MapPanZoomController mapPanZoom;
+
     // ── Private State ─────────────────────────────────────────────────────
     private GameManager gameManager;
     private LocationManager locationManager;
@@ -225,6 +228,15 @@ public class CreatorMapController : MonoBehaviour
             editCollectionModeDropdown.value = 0;
         }
 
+        if (mapPanZoom == null)
+            mapPanZoom = mapContainer.GetComponent<MapPanZoomController>();
+
+        if (mapPanZoom == null)
+        {
+            mapPanZoom = mapContainer.gameObject.AddComponent<MapPanZoomController>();
+            Debug.Log("[CreatorMapController] Added MapPanZoomController for Android");
+        }
+
         newPlacePinButton.onClick.AddListener(PlacePinAtCurrentLocation);
         newSaveButton.onClick.AddListener(SaveNewSet);
         newCancelButton.onClick.AddListener(CloseAllPanels);
@@ -281,14 +293,22 @@ public class CreatorMapController : MonoBehaviour
 
     private void OnLocationUpdated(double lat, double lon)
     {
+        Debug.Log($"[CreatorMapController] Location updated: ({lat:F6}, {lon:F6})");
+
+        // Center map on new location
         tileLoader.CenterMapOn(lat, lon);
-        RefreshAllPinsOnMap();
+
+        // Refresh pins if sets are loaded
+        if (loadedSets.Count > 0)
+        {
+            RefreshAllPinsOnMap();
+        }
     }
 
     #endregion
 
     // ─────────────────────────────────────────────────────────────────────
-    #region READ — Load All Sets onto Map
+    #region READ — Load Sets onto Map
 
     private void LoadAllSetsOntoMap()
     {
@@ -312,10 +332,10 @@ public class CreatorMapController : MonoBehaviour
                     var set = JsonUtility.FromJson<TreasureSetData>(child.GetRawJsonValue());
                     set.setId = child.Key;
                     loadedSets[set.setId] = set;
-                    SpawnPinsForSet(set);
+                    // ← Don't spawn pins here anymore
                 }
 
-                // ← Setup dropdown after loading sets
+                // ← Setup dropdown FIRST (this will trigger OnSetSelected)
                 SetupSetSelectionDropdown();
 
                 SetStatus(loadedSets.Count == 0
@@ -324,36 +344,117 @@ public class CreatorMapController : MonoBehaviour
             });
     }
 
+
+
+
+
+    /// <summary>
+    /// Spawn pins for a specific set on the map
+    /// </summary>
     private void SpawnPinsForSet(TreasureSetData set)
     {
-        float tileSize = mapContainer.rect.width / tileLoader.tileGridSize;
+        if (set == null || set.treasures == null || set.treasures.Count == 0)
+        {
+            Debug.LogWarning("[CreatorMapController] Set has no treasures");
+            return;
+        }
+
+        if (tileLoader == null || mapContainer == null)
+        {
+            Debug.LogError("[CreatorMapController] tileLoader or mapContainer is null");
+            return;
+        }
+
         setMapPins[set.setId] = new List<GameObject>();
 
         foreach (var treasure in set.treasures)
         {
-            Vector2 offset = tileLoader.GpsToPixelOffset(treasure.lat, treasure.lon, tileSize);
-            GameObject pin = Instantiate(pinPrefab, pinsLayer);
-            pin.GetComponent<RectTransform>().anchoredPosition = offset;
+            // ← Use tileLoader.GpsToWorldPosition()
+            Vector3 worldPos = tileLoader.GpsToWorldPosition(treasure.lat, treasure.lon);
+
+            GameObject pin = Instantiate(pinPrefab, mapContainer);
+            pin.name = $"Pin_{treasure.name}";
+
+            RectTransform pinRect = pin.GetComponent<RectTransform>();
+            if (pinRect != null)
+            {
+                pin.transform.position = worldPos;
+                Debug.Log($"[CreatorMapController] Spawned pin '{treasure.name}' at world pos: {worldPos}");
+            }
 
             var label = pin.GetComponentInChildren<TMP_Text>();
-            if (label != null) label.text = treasure.name;
+            if (label != null)
+                label.text = treasure.name;
+
+            var button = pin.GetComponent<Button>();
+            if (button != null)
+            {
+                int treasureIndex = set.treasures.IndexOf(treasure);
+                button.onClick.AddListener(() => OnTreasurePinClicked(set, treasureIndex));
+            }
 
             setMapPins[set.setId].Add(pin);
+        }
+
+        Debug.Log($"[CreatorMapController] Spawned {setMapPins[set.setId].Count} pins for set: {set.setName}");
+    }
+
+    
+
+    /// <summary>
+    /// Called when user clicks on a treasure pin
+    /// </summary>
+    private void OnTreasurePinClicked(TreasureSetData set, int treasureIndex)
+    {
+        if (treasureIndex < 0 || treasureIndex >= set.treasures.Count)
+            return;
+
+        var treasure = set.treasures[treasureIndex];
+        Debug.Log($"[CreatorMapController] Clicked treasure: {treasure.name}");
+
+        // ← Open treasure editor or challenge config
+        if (challengeConfig != null)
+        {
+            challengeConfig.Show(treasureIndex, treasure.challenge, (index, challenge) =>
+            {
+                set.treasures[index].challenge = challenge;
+                Debug.Log($"[CreatorMapController] Challenge saved for {treasure.name}");
+            });
         }
     }
 
     private void RefreshAllPinsOnMap()
     {
-        ClearAllMapPins();
-        foreach (var set in loadedSets.Values) SpawnPinsForSet(set);
-        RedrawPreviewPins();
+        Debug.Log($"[CreatorMapController] Refreshing pins. Sets loaded: {loadedSets.Count}");
+
+        // If we're in selection mode, refresh the selected set
+        if (setSelectionDropdown != null && setSelectionDropdown.interactable)
+        {
+            int selectedIndex = setSelectionDropdown.value;
+            OnSetSelected(selectedIndex);
+        }
+        // If we're editing, refresh the current edit
+        else if (!string.IsNullOrEmpty(editingSetId) && loadedSets.ContainsKey(editingSetId))
+        {
+            ClearAllMapPins();
+            SpawnPinsForSet(loadedSets[editingSetId]);
+        }
     }
 
     private void ClearAllMapPins()
     {
         foreach (var pinList in setMapPins.Values)
-            foreach (var pin in pinList) Destroy(pin);
+        {
+            foreach (var pin in pinList)
+            {
+                if (pin != null)
+                {
+                    Destroy(pin);
+                }
+            }
+        }
         setMapPins.Clear();
+        Debug.Log("[CreatorMapController] Cleared all map pins");
     }
 
     #endregion
@@ -1101,7 +1202,7 @@ public class CreatorMapController : MonoBehaviour
 
         foreach (var set in loadedSets.Values)
         {
-            options.Add($"{set.setName}");
+            options.Add($"{set.setName} ({set.treasures.Count} treasures)");
         }
 
         if (options.Count == 0)
@@ -1114,35 +1215,35 @@ public class CreatorMapController : MonoBehaviour
         setSelectionDropdown.AddOptions(options);
         setSelectionDropdown.interactable = true;
 
-        // Load first set by default
+        // ← Unsubscribe first to avoid duplicate listeners
+        setSelectionDropdown.onValueChanged.RemoveAllListeners();
+
+        // ← Subscribe to dropdown changes
+        setSelectionDropdown.onValueChanged.AddListener(OnSetSelected);
+
+        // ← Load first set by default
         OnSetSelected(0);
 
         Debug.Log($"[CreatorMapController] Setup dropdown with {options.Count} sets");
     }
 
+    /// <summary>
+    /// Called when user selects a set from dropdown
+    /// </summary>
     private void OnSetSelected(int index)
     {
         var selectedSet = GetSetByDropdownIndex(index);
         if (selectedSet == null) return;
 
-        // Load the selected set into edit mode
-        editingSetId = selectedSet.setId;
-        editSetNameInput.text = selectedSet.setName;
+        Debug.Log($"[CreatorMapController] Set selected: {selectedSet.setName}");
 
-        workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(selectedSet.treasures);
-        ClearPreviewPins();
-        RedrawPreviewPins();
-        UpdateEditPinCountText();
+        // ← Clear old pins first
+        ClearAllMapPins();
 
-        // Hide static map pins for this set
-        if (setMapPins.ContainsKey(selectedSet.setId))
-        {
-            foreach (var p in setMapPins[selectedSet.setId]) Destroy(p);
-            setMapPins.Remove(selectedSet.setId);
-        }
+        // ← Spawn pins for the selected set
+        SpawnPinsForSet(selectedSet);
 
-        SetStatus($"Selected '{selectedSet.setName}' ({selectedSet.treasures.Count} treasures)");
-        Debug.Log($"[CreatorMapController] Set selected from dropdown: {selectedSet.setName}");
+        SetStatus($"Selected: {selectedSet.setName} ({selectedSet.treasures.Count} treasures)");
     }
 
     #endregion
@@ -1176,10 +1277,12 @@ public class CreatorMapController : MonoBehaviour
 
     private void SpawnPreviewPin(TreasureManagerGPS_Multiplayer.TreasureData treasure)
     {
-        float tileSize = mapContainer.rect.width / tileLoader.tileGridSize;
-        Vector2 offset = tileLoader.GpsToPixelOffset(treasure.lat, treasure.lon, tileSize);
-        GameObject pin = Instantiate(pinPrefab, pinsLayer);
-        pin.GetComponent<RectTransform>().anchoredPosition = offset;
+        // ← Use tileLoader.GpsToWorldPosition()
+        Vector3 worldPos = tileLoader.GpsToWorldPosition(treasure.lat, treasure.lon);
+
+        GameObject pin = Instantiate(pinPrefab, mapContainer);
+        pin.name = $"PreviewPin_{treasure.name}";
+        pin.transform.position = worldPos;
 
         var label = pin.GetComponentInChildren<TMP_Text>();
         if (label != null) label.text = treasure.name;
@@ -1187,22 +1290,21 @@ public class CreatorMapController : MonoBehaviour
         var img = pin.GetComponent<Image>();
         if (img != null) img.color = Color.yellow;
 
-        // Add clickable button for editing
         var btn = pin.GetComponent<Button>() ?? pin.AddComponent<Button>();
         int capturedIndex = workingPins.Count - 1;
         btn.onClick.AddListener(() =>
         {
-            // Open challenge editor
             if (challengeConfig != null)
                 challengeConfig.Show(capturedIndex, workingPins[capturedIndex].challenge, OnChallengeSaved);
         });
 
-        // Long press or right-click to edit treasure details
         var longPressHandler = pin.AddComponent<LongPressHandler>();
         longPressHandler.OnLongPress += () => OpenTreasureEditor(capturedIndex);
 
         previewPinObjects.Add(pin);
         UpdatePinBadge(pin, treasure.challenge);
+
+        Debug.Log($"[CreatorMapController] Spawned preview pin '{treasure.name}' at world pos: {worldPos}");
     }
 
     private void RedrawPreviewPins()
@@ -1247,6 +1349,8 @@ public class CreatorMapController : MonoBehaviour
             }
         }
     }
+
+    
 
     private void CloseAllPanels()
     {

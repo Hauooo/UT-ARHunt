@@ -81,7 +81,7 @@ public class CheckpointEditorController : MonoBehaviour
         {
             addCheckpointButton.onClick.RemoveAllListeners();
             addCheckpointButton.onClick.AddListener(PlaceCheckpointAtCurrentLocation);
-            addCheckpointButton.GetComponentInChildren<TMP_Text>().text = "[+] Place Checkpoint";
+            addCheckpointButton.GetComponentInChildren<TMP_Text>().text = "Add";
         }
 
         if (editSaveButton != null)
@@ -256,6 +256,15 @@ public class CheckpointEditorController : MonoBehaviour
         {
             button.onClick.RemoveAllListeners();
             button.onClick.AddListener(() => SelectCheckpointForEdit(index));
+        }
+
+        //configure button size
+        var layoutElement = itemObj.GetComponent<LayoutElement>();
+        if (layoutElement != null)
+        {
+            layoutElement.minHeight = 50;
+            layoutElement.preferredHeight = 50;
+            layoutElement.preferredWidth = 100;
         }
 
         Debug.Log($"[CheckpointEditor] Created item for checkpoint {index + 1}: {treasure.name}");

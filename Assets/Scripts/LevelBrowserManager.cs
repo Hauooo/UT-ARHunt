@@ -354,7 +354,7 @@ public class LevelBrowserManager : MonoBehaviour
                              double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
                              string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
 
-                             Vector2 offset = previewTileLoader.GpsToPixelOffset(lat, lon, tileSize);
+                             Vector2 offset = previewTileLoader.GpsToLocalAnchorPosition(lat, lon);
 
                              GameObject pin = Instantiate(previewPinPrefab ?? pinPrefab, previewPinsLayer);
                              RectTransform pinRect = pin.GetComponent<RectTransform>();

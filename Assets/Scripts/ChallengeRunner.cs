@@ -21,7 +21,7 @@ public class ChallengeRunner : MonoBehaviour
     [Header("AR Minigames")]
     [SerializeField] private MemoryMatchManager memoryMatchManager;
     [SerializeField] private OrderSequenceMinigame orderSequenceMinigame;
-    [SerializeField] private ArMCQManager arMcqManager;  // ← ADD THIS
+    [SerializeField] private ArMCQManager arMcqManager;
 
     [Header("Minigame UI")]
     [SerializeField] private GameObject minigamePanel;

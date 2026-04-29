@@ -57,10 +57,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [Header("AR & Game Settings")]
     [SerializeField] private ARRaycastManager arRaycastManager;
     [SerializeField] private GameObject treasurePrefab;
-    [SerializeField] private float spawnRange = 500f;     // meters: must be within this many meters (GPS) to start scanning/spawning
-    [SerializeField] private float revealRadius = 50.0f;  // Unity meters: AR hit point must be close enough to GPS target spot
-    [SerializeField] private float collectDistance = 10f; // Unity meters: show collect button when close enough to spawned instance
-    [SerializeField] private float updateInterval = 2.0f;
+    [SerializeField] private float spawnRange = 10f;      // Closer treasures
+    [SerializeField] private float revealRadius = 5.0f;   // Easier to find
+    [SerializeField] private float collectDistance = 2f;   // Precise tap
+    [SerializeField] private float updateInterval = 1.0f;  // More frequent updates
 
     [Header("Firebase")]
     [SerializeField]
@@ -76,6 +76,15 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [SerializeField] private TMP_Text distanceLabel;
     [SerializeField] private RectTransform arrowIndicator;
     [SerializeField] private ChallengeRunner challengeRunner; // Optional: for future extension to run challenges attached to treasures
+
+    [Header("Timer")]
+    [SerializeField] private TMP_Text timerText;
+    [SerializeField] private Image timerFill;
+
+    // --- Timer State ---
+    private float timeRemaining = 0f;
+    private float totalTime = 0f;
+    private bool timerRunning = false;
 
     // --- Service References ---
     private DatabaseReference dbRef;
@@ -186,18 +195,75 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         if (!servicesReady) return;
 
-        if (!string.IsNullOrEmpty(currentTargetKey))
+        // Spawn treasures when in range
+        if (!string.IsNullOrEmpty(currentTargetKey)
+            && localTreasures.ContainsKey(currentTargetKey)
+            && localTreasures[currentTargetKey].instance == null
+            && CanScanForTreasure())
         {
-            if (CanScanForTreasure()
-                && localTreasures.ContainsKey(currentTargetKey)
-                && localTreasures[currentTargetKey].instance == null)
-            {
-                TrySpawnTreasure();
-            }
+            TrySpawnTreasure();
         }
 
+        // Update timer
+        if (timerRunning)
+        {
+            timeRemaining -= Time.deltaTime;
+            if (timeRemaining <= 0)
+            {
+                timeRemaining = 0;
+                timerRunning = false;
+                HandleTimeUp();
+            }
+            UpdateTimerUI();
+        }
+
+        // Update UI elements
         UpdateUIElements();
     }
+
+    /// <summary>
+    /// Start the game timer with duration from level or challenge
+    /// </summary>
+    public void StartGameTimer(float durationSeconds)
+    {
+        totalTime = durationSeconds;
+        timeRemaining = durationSeconds;
+        timerRunning = true;
+        Debug.Log($"[Timer] Game started with {durationSeconds}s limit");
+    }
+
+    /// <summary>
+    /// Stop the timer (when game completes)
+    /// </summary>
+    public void StopGameTimer()
+    {
+        timerRunning = false;
+        Debug.Log("[Timer] Game timer stopped");
+    }
+
+    private void UpdateTimerUI()
+    {
+        if (timerText != null)
+        {
+            int minutes = (int)timeRemaining / 60;
+            int seconds = (int)timeRemaining % 60;
+            timerText.text = $"{minutes:D2}:{seconds:D2}";
+        }
+
+        if (timerFill != null)
+        {
+            timerFill.fillAmount = timeRemaining / totalTime;
+
+            // Change color as time runs out
+            if (timeRemaining / totalTime > 0.5f)
+                timerFill.color = Color.green;
+            else if (timeRemaining / totalTime > 0.25f)
+                timerFill.color = Color.yellow;
+            else
+                timerFill.color = Color.red;
+        }
+    }
+
 
     /// <summary>
     /// Get all treasures in the current set for uploading
@@ -225,7 +291,6 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Initializing for room: {roomId}");
         currentRoomId = roomId;
 
-        
         ResetForNewLevel();
 
         // Ensure deps FIRST
@@ -246,21 +311,36 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         runStartLocalMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         SaveRunStart(roomId, uid, displayName);
 
-        var gameManager = GameManager.Instance;
-        foreach (var t in gameManager.CurrentLevelTreasures)
+    // Try to load treasures from GameManager first (if they exist there), otherwise fall back to Firebase
+    var gameManager = GameManager.Instance;
+        if (gameManager == null)
+        {
+            Debug.LogWarning("[TreasureManagerGPS_Multiplayer] GameManager.Instance is NULL");
+            LoadTreasuresFromFirebase(roomId);
+            return;
+        }
+
+        var currentLevelTreasures = gameManager.CurrentLevelTreasures;
+        if (currentLevelTreasures == null || currentLevelTreasures.Count == 0)
+        {
+            Debug.Log("[TreasureManagerGPS_Multiplayer] No treasures in CurrentLevelTreasures, loading from Firebase");
+            LoadTreasuresFromFirebase(roomId);
+            return;
+        }
+
+    // Start the game timer with a duration (get from level metadata or default)
+        float timerDuration = gameManager.CurrentLevelTimerSeconds > 0 ? gameManager.CurrentLevelTimerSeconds : 300f; // default 5 minutes
+        StartGameTimer(timerDuration);
+
+    // Debug logging
+    foreach (var t in currentLevelTreasures)
         {
             Debug.Log($"[PreInit] {t.name} | chType={t.challenge?.type} | optCount={(t.challenge?.options == null ? -1 : t.challenge.options.Count)}");
         }
 
-        if (gameManager?.CurrentLevelTreasures != null && gameManager.CurrentLevelTreasures.Count > 0)
-        {
-            Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {gameManager.CurrentLevelTreasures.Count} treasures from level");
-            nextTreasureIndex = 0;
-            InitializeTreasuresFromList(gameManager.CurrentLevelTreasures);
-            return;
-        }
-
-        LoadTreasuresFromFirebase(roomId);
+        Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {currentLevelTreasures.Count} treasures from level");
+        nextTreasureIndex = 0;
+        InitializeTreasuresFromList(currentLevelTreasures);
     }
 
     private void ResetForNewLevel()
@@ -733,6 +813,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         string myUserId = authManager.UserId;
         bool isSinglePlayer = currentRoomId.StartsWith("-");
 
+        Debug.Log($"[RunCollectTransaction] isSinglePlayer={isSinglePlayer}, userId={myUserId}, targetKey={target.key}");
+
         // For single-player, save to a separate collection to track who collected what
         if (isSinglePlayer)
         {
@@ -761,18 +843,12 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      }
 
                      // SUCCESS
-
-                     
                      long totalEarned = target.data.points + bonusPoints;
 
                      if (roomCollectionMode == (int)CollectionMode.InOrder)
                      {
                          nextTreasureIndex++;
                      }
-
-
-
-                     
 
                      if (localTreasures.ContainsKey(target.key))
                      {
@@ -797,45 +873,25 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             return;
         }
 
-        // MULTIPLAYER PATH (atomic room-level transaction for InOrder safety)
-        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
+        // MULTIPLAYER PATH - simplified approach
+        // Instead of transaction on room root, just update the treasure directly
 
-        bool aborted = false;
-        string abortReason = "";
+        DatabaseReference treasureRef = dbRef.Child("rooms").Child(currentRoomId)
+                                             .Child("gameState").Child(target.key);
 
-        roomRef.RunTransaction(mutableData =>
+        treasureRef.RunTransaction(mutableData =>
         {
-            if (mutableData.Value is not Dictionary<string, object> roomData)
+            Debug.Log("[Transaction] Starting treasure transaction...");
+
+            if (mutableData.Value == null)
             {
-                aborted = true;
-                abortReason = "Room data missing.";
+                Debug.LogError("[Transaction] Treasure data is NULL");
                 return TransactionResult.Abort();
             }
 
-            // Read collection mode + next index
-            long modeLong = 0; // default Free
-            if (roomData.TryGetValue("collectionMode", out object modeObj) && modeObj != null)
-                modeLong = Convert.ToInt64(modeObj);
-
-            long nextIndexLong = 0;
-            if (roomData.TryGetValue("nextTreasureIndex", out object nextObj) && nextObj != null)
-                nextIndexLong = Convert.ToInt64(nextObj);
-
-            // Read gameState
-            if (!roomData.TryGetValue("gameState", out object gameStateObj) ||
-                gameStateObj is not Dictionary<string, object> gameState)
+            if (mutableData.Value is not Dictionary<string, object> treasureData)
             {
-                aborted = true;
-                abortReason = "Game state missing.";
-                return TransactionResult.Abort();
-            }
-
-            // Read target treasure node
-            if (!gameState.TryGetValue(target.key, out object treasureObj) ||
-                treasureObj is not Dictionary<string, object> treasureData)
-            {
-                aborted = true;
-                abortReason = "Treasure missing.";
+                Debug.LogError($"[Transaction] Treasure is wrong type: {mutableData.Value.GetType()}");
                 return TransactionResult.Abort();
             }
 
@@ -851,20 +907,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
             if (isCollected)
             {
-                aborted = true;
-                abortReason = "Already collected.";
-                return TransactionResult.Abort();
-            }
-
-            // InOrder guard (atomic)
-            long orderLong = 0;
-            if (treasureData.TryGetValue("orderIndex", out object orderObj) && orderObj != null)
-                orderLong = Convert.ToInt64(orderObj);
-
-            if (modeLong == (long)CollectionMode.InOrder && orderLong != nextIndexLong)
-            {
-                aborted = true;
-                abortReason = $"Wrong order. Next required: #{nextIndexLong + 1}";
+                Debug.LogError("[Transaction] Treasure already collected");
                 return TransactionResult.Abort();
             }
 
@@ -887,16 +930,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             if (bonusPoints > 0)
                 treasureData["bonusPoints"] = bonusPoints;
 
-            gameState[target.key] = treasureData;
-            roomData["gameState"] = gameState;
-
-            // Advance sequence atomically if InOrder
-            if (modeLong == (long)CollectionMode.InOrder)
-            {
-                roomData["nextTreasureIndex"] = nextIndexLong + 1;
-            }
-
-            mutableData.Value = roomData;
+            mutableData.Value = treasureData;
+            Debug.Log("[Transaction] Treasure transaction committed successfully");
             return TransactionResult.Success(mutableData);
 
         }).ContinueWithOnMainThread(task =>
@@ -911,20 +946,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                 return;
             }
 
-            if (aborted)
-            {
-                if (!string.IsNullOrEmpty(abortReason))
-                    LogToUI(abortReason);
-                else
-                    LogToUI("Collect rejected.");
-                return;
-            }
-
             // SUCCESS
             long totalEarned = target.data.points + bonusPoints;
 
-
-
+            // Update player score
             dbRef.Child("rooms").Child(currentRoomId)
                  .Child("scores").Child(myUserId)
                  .RunTransaction(scoreData =>
@@ -934,6 +959,21 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                      return TransactionResult.Success(scoreData);
                  });
 
+            // Clean up local state
+            if (localTreasures.ContainsKey(target.key))
+            {
+                if (localTreasures[target.key].instance != null)
+                    Destroy(localTreasures[target.key].instance);
+                localTreasures.Remove(target.key);
+            }
+
+            if (collectButton != null)
+            {
+                collectButton.gameObject.SetActive(false);
+                collectButton.interactable = false;
+            }
+
+            currentTargetKey = null;
             LogToUI($"Treasure collected! +{totalEarned} points");
             Debug.Log($"[TreasureManager] Treasure '{target.data.name}' collected.");
 
@@ -1205,50 +1245,57 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
     private bool CanScanForTreasure()
     {
-        if (string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey)) return false;
+        if (string.IsNullOrEmpty(currentTargetKey)
+            || !localTreasures.ContainsKey(currentTargetKey)
+            || locationManager == null)
+            return false;
 
         Treasure target = localTreasures[currentTargetKey];
-        if (target.instance != null) return false;
+        if (target.instance != null)
+            return false;
 
         double distance = LocationManager.Haversine(
             target.data.lat, target.data.lon,
             locationManager.Latitude, locationManager.Longitude);
 
-        return true;
+        return distance <= spawnRange;
     }
 
     private void TrySpawnTreasure()
     {
-        if (string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey)) return;
+        if (string.IsNullOrEmpty(currentTargetKey) || !localTreasures.ContainsKey(currentTargetKey))
+            return;
 
         Treasure target = localTreasures[currentTargetKey];
-        if (target.instance != null) return;
 
-        if (arRaycastManager == null) return;
-        if (treasurePrefab == null)
-        {
-            Debug.LogError("[TreasureManagerGPS_Multiplayer] treasurePrefab not assigned.");
+        if (target.instance != null || arRaycastManager == null || treasurePrefab == null || Camera.main == null)
             return;
-        }
 
         var hits = new List<ARRaycastHit>();
         var screenCenter = new Vector2(Screen.width / 2f, Screen.height / 2f);
 
-        if (arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon | TrackableType.PlaneEstimated))
-        {
-            Pose hitPose = hits[0].pose;
-            Quaternion rotatedRotation = hitPose.rotation * Quaternion.Euler(-90, 0, 0);
-            target.instance = Instantiate(treasurePrefab, hitPose.position, rotatedRotation);
+        if (!arRaycastManager.Raycast(screenCenter, hits, TrackableType.PlaneWithinPolygon | TrackableType.PlaneEstimated))
+            return;
 
-            var tapHandler = target.instance.GetComponent<TreasureARTapHandler>();
-            if (tapHandler == null)
-            {
-                tapHandler = target.instance.AddComponent<TreasureARTapHandler>();
-                Debug.Log("[TreasureManager] Added TreasureARTapHandler to spawned treasure");
-            }
+        Pose hitPose = hits[0].pose;
 
-            Debug.Log($"[TreasureManager] Spawned treasure instance: {target.instance.name}");
-        }
+        // Calculate direction to camera
+        Vector3 directionToCamera = Camera.main.transform.position - hitPose.position;
+        directionToCamera.y = 0;
+
+        Quaternion facingRotation = directionToCamera.magnitude > 0.01f
+            ? Quaternion.LookRotation(directionToCamera)
+            : hitPose.rotation;
+
+        Quaternion rotatedRotation = facingRotation * Quaternion.Euler(-90, 0, 0);
+
+        target.instance = Instantiate(treasurePrefab, hitPose.position, rotatedRotation);
+
+        var tapHandler = target.instance.GetComponent<TreasureARTapHandler>();
+        if (tapHandler == null)
+            target.instance.AddComponent<TreasureARTapHandler>();
+
+        Debug.Log($"[TreasureManager] Spawned treasure '{target.data.name}' at: {hitPose.position}");
     }
 
     // --- MODE SWITCHING & UI ---
@@ -1471,5 +1518,16 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         StartListeningForTreasures();
         InvokeRepeating(nameof(UpdateFinderState), 1.0f, updateInterval);
+    }
+
+    private void HandleTimeUp()
+    {
+        LogToUI("Time's up!");
+        Debug.Log("[TreasureManager] Time's up!");
+        // For multiplayer, we might want to end the game immediately or show a summary screen
+        isExitingLevel = true;
+        if (collectButton != null) collectButton.interactable = false;
+        // Optionally, show final scores or navigate to a results screen here
+        LoadScoreboard();
     }
 }

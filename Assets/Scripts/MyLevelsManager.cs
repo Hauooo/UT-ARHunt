@@ -474,8 +474,7 @@ public class MyLevelsManager : MonoBehaviour
                          string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
                          int points = int.TryParse(treasureSnapshot.Child("points").Value?.ToString(), out int p) ? p : 100;
 
-                         // Use EXACT same method as CreatorScene's SpawnPinsForSet()
-                         Vector2 offset = tileLoader.GpsToPixelOffset(lat, lon, tileSize);
+                         Vector2 offset = tileLoader.GpsToLocalAnchorPosition(lat, lon);
 
                          GameObject pin = Instantiate(pinPrefab, pinsLayer);
                          pin.GetComponent<RectTransform>().anchoredPosition = offset;
