@@ -475,7 +475,7 @@ public class MyLevelsManager : MonoBehaviour
                          double lat = double.TryParse(treasureSnapshot.Child("lat").Value?.ToString(), out double l) ? l : 0;
                          double lon = double.TryParse(treasureSnapshot.Child("lon").Value?.ToString(), out double lo) ? lo : 0;
                          string name = treasureSnapshot.Child("name").Value?.ToString() ?? "Treasure";
-                         int points = int.TryParse(treasureSnapshot.Child("points").Value?.ToString(), out int p) ? p : 100;
+                         int points = int.TryParse(treasureSnapshot.Child("points").Value?.ToString(), out int p) ? p : 0;
 
                          Vector2 offset = tileLoader.GpsToLocalAnchorPosition(lat, lon);
 

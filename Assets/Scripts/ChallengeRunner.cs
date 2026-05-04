@@ -217,8 +217,8 @@ public class ChallengeRunner : MonoBehaviour
 
         if (challenge.bonusPoints <= 0)
         {
-            Debug.LogWarning("[ChallengeRunner] AR MCQ bonus points not set, defaulting to 100");
-            challenge.bonusPoints = 100;
+            Debug.LogWarning("[ChallengeRunner] AR MCQ bonus points not set, defaulting to 0");
+            challenge.bonusPoints = 0;
         }
 
         if (arMcqManager == null)

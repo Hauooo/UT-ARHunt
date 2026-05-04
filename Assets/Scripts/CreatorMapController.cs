@@ -508,8 +508,16 @@ public class CreatorMapController : MonoBehaviour
                 }
 
                 SetStatus($"'{setName}' saved!");
+
                 loadedSets[newSetId] = newSet;
-                SpawnPinsForSet(newSet);
+                SetupSetSelectionDropdown();
+
+                int newIndex = loadedSets.Count - 1; // Since it's added at the end
+                if (setSelectionDropdown != null)
+                {
+                    setSelectionDropdown.value = newIndex;
+                }
+
                 ClearPreviewPins();
                 workingPins.Clear();
                 CloseAllPanels();
@@ -662,7 +670,7 @@ public class CreatorMapController : MonoBehaviour
                 label.text = newName;
         }
 
-        SetStatus($"✓ Treasure '{newName}' updated!");
+        SetStatus($"Treasure '{newName}' updated!");
         CloseTreasureEditor();
         Debug.Log($"[CreatorMapController] Saved treasure {selectedTreasureIndex}: {newName}");
         RefreshAllPinsOnMap(); // <-- ensure map pins also reflect changes
@@ -681,7 +689,7 @@ public class CreatorMapController : MonoBehaviour
         UpdateNewPinCountText();
         UpdateEditPinCountText();
 
-        SetStatus($"✓ Treasure '{treasureName}' deleted!");
+        SetStatus($"Treasure '{treasureName}' deleted!");
         CloseTreasureEditor();
         Debug.Log($"[CreatorMapController] Deleted treasure {selectedTreasureIndex}: {treasureName}");
     }
@@ -724,7 +732,7 @@ public class CreatorMapController : MonoBehaviour
         UpdateNewPinCountText();
         UpdateEditPinCountText();
 
-        SetStatus($"✓ {workingPins.Count} checkpoints updated");
+        SetStatus($"{workingPins.Count} checkpoints updated");
         Debug.Log("[CreatorMapController] Checkpoints updated from editor");
 
         SaveCheckpointEditsToSet(); // <-- required for Firebase persistence
@@ -748,23 +756,15 @@ public class CreatorMapController : MonoBehaviour
 
     private void SaveCheckpointEditsToSet()
     {
-        Debug.Log($"[SaveCheckpointEditsToSet] editingSetId={editingSetId}");
-        Debug.Log($"[SaveCheckpointEditsToSet] loadedSets has key? {loadedSets.ContainsKey(editingSetId)}");
-        Debug.Log($"[SaveCheckpointEditsToSet] workingPins count={workingPins?.Count ?? 0}");
-        if (loadedSets.ContainsKey(editingSetId))
-        {
-            Debug.Log($"[SaveCheckpointEditsToSet] target setName={loadedSets[editingSetId].setName}");
-        }
-
         if (string.IsNullOrEmpty(editingSetId) || !loadedSets.ContainsKey(editingSetId))
         {
-            SetStatus("⚠️ No set selected");
+            SetStatus("No set selected");
             return;
         }
 
         if (workingPins == null || workingPins.Count == 0)
         {
-            SetStatus("⚠️ No checkpoints to save");
+            SetStatus("No checkpoints to save");
             return;
         }
 
@@ -772,12 +772,16 @@ public class CreatorMapController : MonoBehaviour
         SetStatus("Saving checkpoints to Firebase...");
 
         var existingSet = loadedSets[editingSetId];
+
+        // Grab the latest mode from the UI dropdown instead of relying on existingSet
+        int latestMode = editCollectionModeDropdown != null ? editCollectionModeDropdown.value : existingSet.collectionMode;
+
         var updatedSet = new TreasureSetData
         {
             setId = editingSetId,
-            setName = existingSet.setName,      // keep current set name
-            createdBy = existingSet.createdBy,  // keep owner
-            collectionMode = existingSet.collectionMode, // keep collection mode
+            setName = existingSet.setName,
+            createdBy = existingSet.createdBy,
+            collectionMode = latestMode, // <--- Now uses the latest UI value!
             treasures = new List<TreasureManagerGPS_Multiplayer.TreasureData>(workingPins)
         };
 
@@ -789,7 +793,7 @@ public class CreatorMapController : MonoBehaviour
 
                 if (task.IsFaulted)
                 {
-                    SetStatus("❌ Firebase update failed");
+                    SetStatus("Firebase update failed");
                     Debug.LogError("[CreatorMapController] " + task.Exception);
                     return;
                 }
@@ -803,8 +807,8 @@ public class CreatorMapController : MonoBehaviour
                 }
                 SpawnPinsForSet(updatedSet);
 
-                SetStatus($"✅ Saved {workingPins.Count} checkpoints!");
-                Debug.Log($"[CreatorMapController] ✅ Replaced treasure set {editingSetId} with updated checkpoints");
+                SetStatus($"Saved {workingPins.Count} checkpoints!");
+                Debug.Log($"[CreatorMapController] Replaced treasure set {editingSetId} with updated checkpoints");
             });
     }
 
@@ -1265,7 +1269,7 @@ public class CreatorMapController : MonoBehaviour
             name = $"Treasure #{workingPins.Count + 1}",
             lat = locationManager.Latitude,
             lon = locationManager.Longitude,
-            points = 100
+            points = 0
         };
 
         workingPins.Add(newPin);

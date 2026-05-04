@@ -640,7 +640,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             name = "Treasure",
             lat = locationManager.Latitude,
             lon = locationManager.Longitude,
-            points = 100,
+            points = 0,
             collectedBy = null
         };
 
