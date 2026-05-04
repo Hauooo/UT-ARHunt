@@ -57,7 +57,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     [Header("AR & Game Settings")]
     [SerializeField] private ARRaycastManager arRaycastManager;
     [SerializeField] private GameObject treasurePrefab;
-    [SerializeField] private float spawnRange = 10f;      // Closer treasures
+    [SerializeField] private float spawnRange = 5f;      // Closer treasures
     [SerializeField] private float revealRadius = 5.0f;   // Easier to find
     [SerializeField] private float collectDistance = 2f;   // Precise tap
     [SerializeField] private float updateInterval = 1.0f;  // More frequent updates
@@ -446,21 +446,37 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading treasures from Firebase for room: {roomId}");
         LogToUI("Loading treasures...");
 
-        dbRef.Child("rooms").Child(roomId).GetValueAsync().ContinueWithOnMainThread(roomTask =>
+        // Check if it's a single player level or a multiplayer room
+        string rootFolder = roomId.StartsWith("-") ? "levels" : "rooms";
+
+        dbRef.Child(rootFolder).Child(roomId).GetValueAsync().ContinueWithOnMainThread(roomTask =>
         {
             if (!roomTask.IsFaulted && roomTask.Result.Exists)
             {
                 var roomSnap = roomTask.Result;
 
-                if (roomSnap.HasChild("collectionMode") &&
-                    int.TryParse(roomSnap.Child("collectionMode").Value?.ToString(), out int mode))
-                    roomCollectionMode = mode;
+                // Safely parse the collection mode whether it was saved as an int (1) or string ("In Order")
+                if (roomSnap.HasChild("collectionMode"))
+                {
+                    string modeStr = roomSnap.Child("collectionMode").Value?.ToString();
+                    if (modeStr == "1" || modeStr == "In Order")
+                    {
+                        roomCollectionMode = 1; // 1 = InOrder
+                    }
+                    else
+                    {
+                        roomCollectionMode = 0; // 0 = FreeOrder
+                    }
+                }
 
                 if (roomSnap.HasChild("nextTreasureIndex") &&
                     int.TryParse(roomSnap.Child("nextTreasureIndex").Value?.ToString(), out int idx))
+                {
                     nextTreasureIndex = idx;
-            }
+                }
 
+                Debug.Log($"[TreasureManager] Loaded Collection Mode: {roomCollectionMode} (0=Free, 1=InOrder)");
+            }
         });
 
         dbRef.Child("rooms").Child(roomId).Child("gameState")
@@ -1224,23 +1240,54 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         double myLat = locationManager.Latitude;
         double myLon = locationManager.Longitude;
 
-        string nearestKey = null;
-        float minDistance = float.MaxValue;
+        string targetKey = null;
 
-        foreach (var treasure in localTreasures.Values)
+        // If InOrder mode (1), target EXACTLY the next sequence item
+        if (roomCollectionMode == 1) // 1 = InOrder
         {
-            bool alreadyCollected = treasure.data.collectedBy != null && treasure.data.collectedBy.Count > 0;
-            if (alreadyCollected) continue;
-
-            float distance = (float)LocationManager.Haversine(treasure.data.lat, treasure.data.lon, myLat, myLon);
-            if (distance < minDistance)
+            foreach (var treasure in localTreasures.Values)
             {
-                minDistance = distance;
-                nearestKey = treasure.key;
+                bool alreadyCollected = treasure.data.collectedBy != null && treasure.data.collectedBy.Count > 0;
+                if (!alreadyCollected && treasure.data.orderIndex == nextTreasureIndex)
+                {
+                    targetKey = treasure.key;
+                    Debug.Log($"[UpdateFinderState] IN-ORDER MODE: Targeting checkpoint #{nextTreasureIndex} ('{treasure.data.name}')");
+                    break; // Found the exact next one in sequence
+                }
+            }
+
+            if (string.IsNullOrEmpty(targetKey))
+            {
+                Debug.Log($"[UpdateFinderState] IN-ORDER MODE: Could not find uncollected checkpoint with orderIndex #{nextTreasureIndex}");
+            }
+        }
+        // Otherwise (Free Order), target the CLOSEST uncollected treasure
+        else
+        {
+            float minDistance = float.MaxValue;
+            string closestName = "";
+
+            foreach (var treasure in localTreasures.Values)
+            {
+                bool alreadyCollected = treasure.data.collectedBy != null && treasure.data.collectedBy.Count > 0;
+                if (alreadyCollected) continue;
+
+                float distance = (float)GetDistanceInMeters(treasure.data.lat, treasure.data.lon, myLat, myLon);
+                if (distance < minDistance)
+                {
+                    minDistance = distance;
+                    targetKey = treasure.key;
+                    closestName = treasure.data.name;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(targetKey))
+            {
+                Debug.Log($"[UpdateFinderState] FREE-ORDER MODE: Targeting closest checkpoint '{closestName}' at {minDistance:F1}m away.");
             }
         }
 
-        currentTargetKey = nearestKey;
+        currentTargetKey = targetKey;
     }
 
     private bool CanScanForTreasure()
@@ -1252,13 +1299,22 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
 
         Treasure target = localTreasures[currentTargetKey];
         if (target.instance != null)
-            return false;
+            return false; // Already spawned
 
+        // Calculate the exact distance in meters using your Haversine formula
         double distance = LocationManager.Haversine(
             target.data.lat, target.data.lon,
             locationManager.Latitude, locationManager.Longitude);
 
-        return distance <= spawnRange;
+        // --- DEBUG LOGGING ---
+        // This will print exactly what the game sees in the Unity Console or Android Logcat
+        Debug.Log($"[SPAWN CHECK] Treasure: {target.data.name} | Distance: {distance:F2}m | Spawn Range Allowed: {spawnRange}m");
+
+        // --- STRICT SAFETY CLAMP ---
+        // If the Inspector accidentally set spawnRange to 500, this forces it back to a safe maximum (e.g. 15 meters)
+        float actualSpawnRange = Mathf.Min(spawnRange, 15f);
+
+        return distance <= actualSpawnRange;
     }
 
     private void TrySpawnTreasure()
@@ -1417,7 +1473,7 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         {
             distanceLabel.text = "Searching...";
             arrowIndicator.gameObject.SetActive(false);
-            statusText.text = localTreasures.Count == 0 ? "No active treasures found." : "Finding closest treasure...";
+            statusText.text = localTreasures.Count == 0 ? "No active treasures found." : "Finding treasure...";
             return;
         }
 
@@ -1484,6 +1540,20 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         double z = dLat * R;
 
         return new Vector3((float)x, 0, (float)z);
+    }
+
+    private double GetDistanceInMeters(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double R = 6371000.0; // Earth's radius in METERS
+        double dLat = (lat2 - lat1) * Math.PI / 180.0;
+        double dLon = (lon2 - lon1) * Math.PI / 180.0;
+
+        double a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                   Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0) *
+                   Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+
+        double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        return R * c;
     }
 
     private void LogToUI(string msg)

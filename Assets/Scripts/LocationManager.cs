@@ -29,12 +29,6 @@ public class LocationManager : MonoBehaviour
     [Tooltip("Minimum distance in meters the user must move to trigger the OnLocationUpdated event.")]
     [SerializeField] private float locationUpdateThreshold = 20f;
 
-    [Header("Editor Mock Data")]
-    [Tooltip("Allows testing in the Unity Editor without a real GPS.")]
-    [SerializeField] private bool useMockDataInEditor = true;
-    [SerializeField] private double mockLatitude = 4.3089;  // Kampar, Perak
-    [SerializeField] private double mockLongitude = 101.1428; // Kampar, Perak
-
     private double lastUpdateLatitude;
     private double lastUpdateLongitude;
 
@@ -53,14 +47,7 @@ public class LocationManager : MonoBehaviour
 
     private IEnumerator Start()
     {
-        // Handle Editor mocking for easy testing
-#if UNITY_EDITOR
-        if (useMockDataInEditor)
-        {
-            StartCoroutine(MockLocationRoutine());
-            yield break; // Stop the rest of the Start method
-        }
-#endif
+        
         // On a real device, run the normal initialization
         yield return InitializeLocationService();
     }
@@ -108,9 +95,7 @@ public class LocationManager : MonoBehaviour
     {
         if (Status != LocationStatus.Ready) return;
 
-#if UNITY_EDITOR
-        if (useMockDataInEditor) return; // Don't run real update logic in mock mode
-#endif
+
 
         // Smooth the location values every frame for jitter-free visuals
         double smoothT = Time.deltaTime * smoothFactor;
@@ -129,23 +114,7 @@ public class LocationManager : MonoBehaviour
         }
     }
 
-    // This coroutine simulates location updates in the editor
-    private IEnumerator MockLocationRoutine()
-    {
-        Debug.LogWarning("--- USING MOCK LOCATION DATA IN EDITOR ---");
-        Latitude = mockLatitude;
-        Longitude = mockLongitude;
-        Accuracy = 5.0f;
-        SetStatus(LocationStatus.Ready);
-
-        // You can add logic here to simulate movement for testing if needed
-        // For example, periodically fire the update event:
-        // yield return new WaitForSeconds(10);
-        // OnLocationUpdated?.Invoke(Latitude, Longitude);
-
-        yield break;
-
-    }
+    
 
     private void SetStatus(LocationStatus newStatus)
     {

@@ -697,13 +697,17 @@ public class CreatorMapController : MonoBehaviour
 
     private void OpenCheckpointEditor()
     {
-        if (string.IsNullOrEmpty(editingSetId) || !loadedSets.ContainsKey(editingSetId))
+        var selectedSet = GetCurrentlySelectedSet();
+
+        if (selectedSet == null || string.IsNullOrEmpty(selectedSet.setId))
         {
-            SetStatus("⚠️ No set selected in Edit mode");
+            SetStatus("No valid set selected to edit checkpoints.");
             return;
         }
 
-        var selectedSet = loadedSets[editingSetId];
+        // Set the editing ID so the save function knows where to put it
+        editingSetId = selectedSet.setId;
+
         workingPins = new List<TreasureManagerGPS_Multiplayer.TreasureData>(selectedSet.treasures);
 
         checkpointEditorPanel.SetActive(true);

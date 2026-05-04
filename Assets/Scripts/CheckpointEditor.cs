@@ -145,7 +145,7 @@ public class CheckpointEditorController : MonoBehaviour
         if (challengeTypeDropdown != null)
         {
             challengeTypeDropdown.ClearOptions();
-            challengeTypeDropdown.AddOptions(new List<string> { "None", "MCQ", "Minigame" });
+            challengeTypeDropdown.AddOptions(new List<string> { "None", "MCQ","ARMCQ", "Minigame" });
         }
 
         // Correct Answer Dropdown
@@ -199,7 +199,7 @@ public class CheckpointEditorController : MonoBehaviour
 
         var newCheckpoint = new TreasureManagerGPS_Multiplayer.TreasureData
         {
-            name = $"Checkpoint {treasures.Count + 1}",
+            name = $"Treasure #{treasures.Count + 1}",
             lat = lat,
             lon = lon,
             points = 100,
@@ -424,17 +424,18 @@ public class CheckpointEditorController : MonoBehaviour
                 if (mcqSubPanel != null) mcqSubPanel.SetActive(true);
                 Debug.Log("[CheckpointEditor] Challenge type: MCQ");
                 break;
+            case 2: // ARMCQ
+                if (mcqSubPanel != null) mcqSubPanel.SetActive(true);
+                Debug.Log("[CheckpointEditor] Challenge type: ARMCQ");
+                break;
 
-            case 2: // Minigame
+            case 3: // Minigame
                 if (minigameSubPanel != null) minigameSubPanel.SetActive(true);
                 Debug.Log("[CheckpointEditor] Challenge type: Minigame");
                 break;
         }
     }
 
-    /// <summary>
-    /// Save challenge configuration
-    /// </summary>
     private void OnSaveChallenge()
     {
         if (selectedCheckpointIndex < 0 || selectedCheckpointIndex >= treasures.Count)
@@ -453,9 +454,14 @@ public class CheckpointEditorController : MonoBehaviour
         else if (typeIndex == 1) // MCQ
         {
             if (!ValidateMCQ()) return;
-            data = BuildMCQData();
+            data = BuildMCQData(ChallengeType.MCQ); // Pass MCQ
         }
-        else if (typeIndex == 2) // Minigame
+        else if (typeIndex == 2) // ARMCQ
+        {
+            if (!ValidateMCQ()) return;
+            data = BuildMCQData(ChallengeType.ARMCQ); // Pass ARMCQ
+        }
+        else if (typeIndex == 3) // Minigame
         {
             data = BuildMinigameData();
         }
@@ -510,7 +516,7 @@ public class CheckpointEditorController : MonoBehaviour
         return true;
     }
 
-    private ChallengeData BuildMCQData()
+    private ChallengeData BuildMCQData(ChallengeType challengeType)
     {
         var options = new List<MCQOption>();
         int correctIndex = correctAnswerDropdown.value;
@@ -532,13 +538,15 @@ public class CheckpointEditorController : MonoBehaviour
 
         return new ChallengeData
         {
-            type = ChallengeType.MCQ,
+            type = challengeType, // Use the type passed in (MCQ or ARMCQ)
             question = questionInput.text.Trim(),
             options = options,
             bonusPoints = bonus > 0 ? bonus : 50,
             maxAttempts = attempts > 0 ? attempts : 3
         };
     }
+
+
 
     // ── Minigame Validation & Building ────────────────────────────────────────
 
@@ -580,7 +588,10 @@ public class CheckpointEditorController : MonoBehaviour
         switch (data.type)
         {
             case ChallengeType.MCQ:
-                challengeTypeDropdown.value = 1;
+            case ChallengeType.ARMCQ:
+                // 1 is MCQ, 2 is ARMCQ based on your SetupDropdowns order
+                challengeTypeDropdown.value = (data.type == ChallengeType.MCQ) ? 1 : 2;
+
                 questionInput.text = data.question ?? "";
                 bonusPointsInput.text = data.bonusPoints.ToString();
                 maxAttemptsInput.text = data.maxAttempts.ToString();
@@ -597,7 +608,9 @@ public class CheckpointEditorController : MonoBehaviour
 
             case ChallengeType.MemoryMatch:
             case ChallengeType.OrderSequence:
-                challengeTypeDropdown.value = 2;
+                // Minigame is now index 3 in the dropdown!
+                challengeTypeDropdown.value = 3;
+
                 int idx = minigameOptions.IndexOf(data.minigameId ?? "");
                 minigameSelectionDropdown.value = idx >= 0 ? idx : 0;
                 timeLimitInput.text = data.timeLimitSeconds.ToString();
@@ -611,7 +624,7 @@ public class CheckpointEditorController : MonoBehaviour
         questionInput.text = "";
         foreach (var opt in optionInputs) opt.text = "";
         correctAnswerDropdown.value = 0;
-        bonusPointsInput.text = "50";
+        bonusPointsInput.text = "150";
         maxAttemptsInput.text = "3";
         minigameSelectionDropdown.value = 0;
         timeLimitInput.text = "60";

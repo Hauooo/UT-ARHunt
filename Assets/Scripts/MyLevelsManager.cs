@@ -277,10 +277,13 @@ public class MyLevelsManager : MonoBehaviour
                  {
                      try
                      {
-                         if (levelSnapshot.HasChild("creatorName"))
+                         // Look for 'createdBy' (the userId) instead of 'creatorName'
+                         if (levelSnapshot.HasChild("createdBy"))
                          {
-                             string levelCreator = levelSnapshot.Child("creatorName").Value?.ToString();
-                             if (levelCreator == creatorName)
+                             string levelCreatorId = levelSnapshot.Child("createdBy").Value?.ToString();
+
+                             // Compare against the currentUser.UserId, not DisplayName
+                             if (levelCreatorId == currentUser.UserId)
                              {
                                  var levelData = ParseLevelData(levelSnapshot);
                                  if (levelData != null)
