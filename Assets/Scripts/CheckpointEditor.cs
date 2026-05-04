@@ -202,7 +202,7 @@ public class CheckpointEditorController : MonoBehaviour
             name = $"Treasure #{treasures.Count + 1}",
             lat = lat,
             lon = lon,
-            points = 100,
+            points = 0,
             challenge = new ChallengeData { type = ChallengeType.None }
         };
 
@@ -569,7 +569,8 @@ public class CheckpointEditorController : MonoBehaviour
         {
             type = resolvedType,
             minigameId = id,
-            timeLimitSeconds = timeLimit > 0 ? timeLimit : 60
+            timeLimitSeconds = timeLimit > 0 ? timeLimit : 60,
+            bonusPoints = 50
         };
     }
 
