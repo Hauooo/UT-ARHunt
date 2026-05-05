@@ -326,19 +326,27 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
             return;
         }
 
-        // Start the game timer with a duration (get from level metadata or default)
-        float timerDuration = gameManager.CurrentLevelTimerSeconds > 0 ? gameManager.CurrentLevelTimerSeconds : 300f; // default 5 minutes
-        StartGameTimer(timerDuration);
-
-        // Debug logging
-        foreach (var t in currentLevelTreasures)
+        // FETCH METADATA FOR SINGLE-PLAYER LEVEL BEFORE INITIALIZING
+        string rootFolder = roomId.StartsWith("-") ? "levels" : "rooms";
+        dbRef.Child(rootFolder).Child(roomId).Child("collectionMode").GetValueAsync().ContinueWithOnMainThread(task =>
         {
-            Debug.Log($"[PreInit] {t.name} | chType={t.challenge?.type} | optCount={(t.challenge?.options == null ? -1 : t.challenge.options.Count)}");
-        }
+            if (!task.IsFaulted && task.Result.Exists)
+            {
+                string modeStr = task.Result.Value?.ToString();
+                roomCollectionMode = (modeStr == "1" || modeStr == "In Order") ? 1 : 0;
+                Debug.Log($"[TreasureManager] Loaded Collection Mode for Singleplayer: {roomCollectionMode}");
+            }
 
-        Debug.Log($"[TreasureManagerGPS_Multiplayer] Loading {currentLevelTreasures.Count} treasures from level");
-        nextTreasureIndex = 0;
-        InitializeTreasuresFromList(currentLevelTreasures);
+            // Start the game timer with a duration
+            float timerDuration = gameManager.CurrentLevelTimerSeconds > 0 ? gameManager.CurrentLevelTimerSeconds : 300f;
+            StartGameTimer(timerDuration);
+
+            nextTreasureIndex = 0;
+            InitializeTreasuresFromList(currentLevelTreasures);
+        });
+
+        // NOTE: Remove the old StartGameTimer and InitializeTreasuresFromList lines that were below here, 
+        // as they are now safely inside the ContinueWithOnMainThread block above!
     }
 
     private void ResetForNewLevel()
@@ -505,6 +513,9 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
                         TreasureData data = ParseTreasureDataFromSnapshot(treasureSnapshot);
 
                         // Skip if already collected
+                        // Skip if already collected BY ME
+                        string myUid = authManager?.UserId;
+                        // Skip if already collected
                         bool alreadyCollected = data.collectedBy != null && data.collectedBy.Count > 0;
                         if (alreadyCollected) continue;
 
@@ -654,7 +665,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
+        string rootFolder = currentRoomId.StartsWith("-") ? "levels" : "rooms";
+        DatabaseReference roomRef = dbRef.Child(rootFolder).Child(currentRoomId);
         DatabaseReference gameStateRef = roomRef.Child("gameState");
 
         gameStateRef.ChildAdded += HandleTreasureAdded;
@@ -671,7 +683,8 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
     {
         if (dbRef == null || string.IsNullOrEmpty(currentRoomId)) return;
 
-        DatabaseReference roomRef = dbRef.Child("rooms").Child(currentRoomId);
+        string rootFolder = currentRoomId.StartsWith("-") ? "levels" : "rooms";
+        DatabaseReference roomRef = dbRef.Child(rootFolder).Child(currentRoomId);
         DatabaseReference gameStateRef = roomRef.Child("gameState");
 
         gameStateRef.ChildAdded -= HandleTreasureAdded;
@@ -1241,7 +1254,10 @@ public class TreasureManagerGPS_Multiplayer : MonoBehaviour
         {
             foreach (var treasure in localTreasures.Values)
             {
+                string myUid = authManager?.UserId;
                 bool alreadyCollected = treasure.data.collectedBy != null && treasure.data.collectedBy.Count > 0;
+
+                // In-Order mode
                 if (!alreadyCollected && treasure.data.orderIndex == nextTreasureIndex)
                 {
                     targetKey = treasure.key;

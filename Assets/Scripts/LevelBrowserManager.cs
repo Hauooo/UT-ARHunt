@@ -604,7 +604,8 @@ public class LevelBrowserManager : MonoBehaviour
                 name = snapshot.HasChild("name") ? snapshot.Child("name").Value?.ToString() ?? "Treasure" : "Treasure",
                 lat = snapshot.HasChild("lat") ? double.Parse(snapshot.Child("lat").Value?.ToString() ?? "0") : 0,
                 lon = snapshot.HasChild("lon") ? double.Parse(snapshot.Child("lon").Value?.ToString() ?? "0") : 0,
-                points = snapshot.HasChild("points") ? int.Parse(snapshot.Child("points").Value?.ToString() ?? "0") : 0
+                points = snapshot.HasChild("points") ? int.Parse(snapshot.Child("points").Value?.ToString() ?? "0") : 0,
+                orderIndex = snapshot.HasChild("orderIndex") ? int.Parse(snapshot.Child("orderIndex").Value?.ToString() ?? "0") : 0
             };
 
             if (snapshot.HasChild("challenge"))
